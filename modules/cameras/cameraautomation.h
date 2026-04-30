@@ -1,0 +1,13 @@
+//
+// Created by brown on 2026-04-30.
+//
+
+#ifndef HOME_AUTOMATION_HUB_CAMERAAUTOMATION_H
+#define HOME_AUTOMATION_HUB_CAMERAAUTOMATION_H
+
+
+class cameraautomation {
+};
+
+
+#endif //HOME_AUTOMATION_HUB_CAMERAAUTOMATION_H
