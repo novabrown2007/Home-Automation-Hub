@@ -18,20 +18,26 @@ std::string lowercase(std::string value) {
 
 bool Cameras::registerFeed(
     const std::string& cameraId,
+    const std::string& sourceFeedUrl,
     const std::string& rawFeedUrl,
     const std::string& streamUrl,
+    const std::string& frameUrl,
+    const std::string& audioFeedUrl,
     const std::string& resolution
 ) {
-    if (cameraId.empty() || rawFeedUrl.empty()) {
-        Logger::instance().warning("Cameras", "Rejected camera feed registration because cameraId or rawFeedUrl was empty.");
+    if (cameraId.empty() || frameUrl.empty()) {
+        Logger::instance().warning("Cameras", "Rejected camera feed registration because cameraId or frameUrl was empty.");
         return false;
     }
 
     std::lock_guard lock(mutex);
     feeds[cameraId] = CameraFeed{
         .cameraId = cameraId,
+        .sourceFeedUrl = sourceFeedUrl,
         .rawFeedUrl = rawFeedUrl,
         .streamUrl = streamUrl.empty() ? rawFeedUrl : streamUrl,
+        .frameUrl = frameUrl,
+        .audioFeedUrl = audioFeedUrl,
         .resolution = resolution,
         .processingStatus = "Registered",
         .modeProfile = buildModeProfile(CameraMode::Home),
@@ -42,8 +48,11 @@ bool Cameras::registerFeed(
     Logger::instance().info(
         "Cameras",
         "Registered feed for camera=" + cameraId +
+        " sourceFeedUrl=" + sourceFeedUrl +
         " rawFeedUrl=" + rawFeedUrl +
         " streamUrl=" + (streamUrl.empty() ? rawFeedUrl : streamUrl) +
+        " frameUrl=" + frameUrl +
+        " audioFeedUrl=" + audioFeedUrl +
         " resolution=" + resolution
     );
     return true;
@@ -124,6 +133,8 @@ bool Cameras::updateDetectionState(const std::string& cameraId, const CameraDete
         "Cameras",
         "Camera=" + cameraId +
         " detectionState motion=" + std::string(state.motionDetected ? "true" : "false") +
+        " motionScore=" + std::to_string(state.motionScore) +
+        " lastFrameBytes=" + std::to_string(state.lastFrameBytes) +
         " familiarFace=" + std::string(state.familiarFaceDetected ? "true" : "false") +
         " unknownFace=" + std::string(state.unknownFaceDetected ? "true" : "false") +
         " strangeSound=" + std::string(state.strangeSoundDetected ? "true" : "false") +

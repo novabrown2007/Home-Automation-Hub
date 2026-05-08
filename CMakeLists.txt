@@ -11,6 +11,12 @@ set(HUB_SOURCES
         accesspoint/server.h
         logging/logger.cpp
         logging/logger.h
+        network/httpclient.cpp
+        network/httpclient.h
+        notifications/bridgenotifier.cpp
+        notifications/bridgenotifier.h
+        notifications/notifications.cpp
+        notifications/notifications.h
         interface/bridgeconnection.cpp
         interface/bridgeconnection.h
         config/configloader.cpp
@@ -19,6 +25,8 @@ set(HUB_SOURCES
         modules/cameras/cameras.h
         modules/cameras/cameraautomation.cpp
         modules/cameras/cameraautomation.h
+        modules/cameras/motiondetector.cpp
+        modules/cameras/motiondetector.h
         modules/lights/lights.cpp
         modules/lights/lights.h
         modules/routines/routinemanager.cpp

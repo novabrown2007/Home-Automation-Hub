@@ -3,6 +3,8 @@
 #include "logging/logger.h"
 #include "modules/cameras/cameraautomation.h"
 #include "modules/cameras/cameras.h"
+#include "notifications/bridgenotifier.h"
+#include "notifications/notifications.h"
 #include "threading/threadmanager.h"
 
 #include <chrono>
@@ -24,7 +26,9 @@ int main() {
     threadManager.start();
 
     Cameras cameras;
-    CameraAutomation cameraAutomation(cameras, threadManager);
+    NotificationCenter notifications;
+    BridgeNotifier bridgeNotifier("http://127.0.0.1:8080/notifications");
+    CameraAutomation cameraAutomation(cameras, threadManager, notifications, bridgeNotifier);
     threadManager.registerBackgroundJob({
         .name = "camera-analysis",
         .interval = std::chrono::milliseconds(2000),
@@ -34,7 +38,7 @@ int main() {
         .runImmediately = false
     });
     Logger::instance().info("Main", "Camera automation background jobs registered.");
-    API api(cameras, cameraAutomation);
+    API api(cameras, cameraAutomation, notifications);
     Server server(api);
     server.start(8081);
     Logger::instance().info("Main", "Home Automation Hub shutting down.");

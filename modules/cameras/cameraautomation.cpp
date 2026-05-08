@@ -1,11 +1,10 @@
 #include "cameraautomation.h"
 
-#include <algorithm>
-
 #include "../../logging/logger.h"
+#include "../../network/httpclient.h"
 
-CameraAutomation::CameraAutomation(Cameras& cameras, ThreadManager& threadManager)
-    : cameras(cameras), threadManager(threadManager) {}
+CameraAutomation::CameraAutomation(Cameras& cameras, ThreadManager& threadManager, NotificationCenter& notifications, BridgeNotifier& bridgeNotifier)
+    : cameras(cameras), threadManager(threadManager), notifications(notifications), bridgeNotifier(bridgeNotifier) {}
 
 void CameraAutomation::scheduleFeedProcessing(const std::string& cameraId) {
     Logger::instance().debug("CameraAutomation", "Queueing camera feed processing for camera=" + cameraId);
@@ -35,8 +34,10 @@ void CameraAutomation::processFeed(const std::string& cameraId) {
     Logger::instance().info(
         "CameraAutomation",
         "Processing camera=" + cameraId +
+        " sourceFeedUrl=" + feed.sourceFeedUrl +
         " rawFeedUrl=" + feed.rawFeedUrl +
         " streamUrl=" + feed.streamUrl +
+        " frameUrl=" + feed.frameUrl +
         " mode=" + Cameras::modeToString(feed.modeProfile.mode) +
         " rawFeedVisible=" + std::string(feed.modeProfile.analyzers.rawFeedVisible ? "true" : "false") +
         " motionDetectionEnabled=" + std::string(feed.modeProfile.analyzers.motionDetectionEnabled ? "true" : "false") +
@@ -50,47 +51,75 @@ void CameraAutomation::processFeed(const std::string& cameraId) {
     detectionState.familiarFaceDetected = false;
     detectionState.unknownFaceDetected = false;
     detectionState.strangeSoundDetected = false;
+    detectionState.motionScore = 0.0;
+    detectionState.lastFrameBytes = 0;
     detectionState.lastEvent = "Analyzers idle";
 
-    const std::string loweredUrl = [&]() {
-        std::string value = feed.rawFeedUrl;
-        std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
-            return static_cast<char>(std::tolower(ch));
-        });
-        return value;
-    }();
-
     const CameraAnalyzers& analyzers = feed.modeProfile.analyzers;
-    if (analyzers.motionDetectionEnabled && loweredUrl.find("motion") != std::string::npos) {
-        detectionState.motionDetected = true;
-        detectionState.lastEvent = "Motion detected";
-        Logger::instance().warning("CameraAutomation", "Trigger fired for camera=" + cameraId + ": motion detected");
-    }
-
-    if (analyzers.facialRecognitionEnabled) {
-        if (loweredUrl.find("unknown-face") != std::string::npos) {
-            detectionState.unknownFaceDetected = true;
-            detectionState.lastEvent = "Unknown face detected";
-            Logger::instance().warning("CameraAutomation", "Trigger fired for camera=" + cameraId + ": unknown face detected");
-        } else if (loweredUrl.find("face") != std::string::npos || loweredUrl.find("family") != std::string::npos) {
-            detectionState.familiarFaceDetected = true;
-            detectionState.lastEvent = "Familiar face detected";
-            Logger::instance().info("CameraAutomation", "Trigger fired for camera=" + cameraId + ": familiar face detected");
-        }
-    }
-
-    if (analyzers.strangeSoundDetectionEnabled && loweredUrl.find("sound-alert") != std::string::npos) {
-        detectionState.strangeSoundDetected = true;
-        detectionState.lastEvent = "Strange sound detected";
-        Logger::instance().warning("CameraAutomation", "Trigger fired for camera=" + cameraId + ": strange sound detected");
-    }
-
     if (!analyzers.rawFeedVisible) {
         detectionState.lastEvent = "Privacy mode active";
         Logger::instance().info("CameraAutomation", "Camera=" + cameraId + " is in privacy mode; raw feed visibility disabled");
+        cameras.updateDetectionState(cameraId, detectionState);
+        cameras.updateProcessingStatus(cameraId, "Ready");
+        return;
+    }
+
+    const HttpResponse frameResponse = HttpClient::get(feed.frameUrl);
+    if (!frameResponse.ok()) {
+        detectionState.lastEvent = "Frame fetch failed";
+        cameras.updateDetectionState(cameraId, detectionState);
+        cameras.updateProcessingStatus(cameraId, "Capture Failed");
+
+        const Notification notification = notifications.enqueue(
+            "hub",
+            "warning",
+            "camera",
+            "Camera frame fetch failed",
+            "The hub could not fetch the latest frame from the bridge.",
+            cameraId
+        );
+        bridgeNotifier.publish(notification);
+        Logger::instance().warning(
+            "CameraAutomation",
+            "Frame fetch failed for camera=" + cameraId +
+            " statusCode=" + std::to_string(frameResponse.statusCode) +
+            " statusText=" + frameResponse.statusText
+        );
+        return;
+    }
+
+    detectionState.lastFrameBytes = frameResponse.body.size();
+
+    if (analyzers.motionDetectionEnabled) {
+        const MotionResult motion = motionDetector.analyzeFrame(cameraId, frameResponse.body);
+        detectionState.motionScore = motion.score;
+        detectionState.motionDetected = motion.detected;
+
+        Logger::instance().info(
+            "CameraAutomation",
+            "Motion analysis for camera=" + cameraId +
+            " score=" + std::to_string(motion.score) +
+            " sampledBytes=" + std::to_string(motion.sampledBytes) +
+            " detected=" + std::string(motion.detected ? "true" : "false")
+        );
+
+        if (motion.detected) {
+            detectionState.lastEvent = "Motion detected";
+            const Notification notification = notifications.enqueue(
+                "hub",
+                "warning",
+                "camera",
+                "Motion detected",
+                "Motion detected for " + cameraId + ".",
+                cameraId
+            );
+            bridgeNotifier.publish(notification);
+            Logger::instance().warning("CameraAutomation", "Trigger fired for camera=" + cameraId + ": motion detected");
+        }
     }
 
     if (detectionState.lastEvent == "Analyzers idle") {
+        detectionState.lastEvent = "Monitoring";
         Logger::instance().debug("CameraAutomation", "No triggers fired for camera=" + cameraId);
     }
 

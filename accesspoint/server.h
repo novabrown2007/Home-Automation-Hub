@@ -19,7 +19,15 @@ private:
     void sendResponse(
         SOCKET clientSocket,
         const std::string& body,
+        const std::string& contentType = "application/json",
         int statusCode = 200,
         const std::string& statusText = "OK"
+    );
+
+    void sendResponse(
+        SOCKET clientSocket,
+        const std::string& body,
+        int statusCode,
+        const std::string& statusText
     );
 };

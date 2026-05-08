@@ -26,6 +26,8 @@ struct CameraDetectionState {
     bool familiarFaceDetected{false};
     bool unknownFaceDetected{false};
     bool strangeSoundDetected{false};
+    double motionScore{0.0};
+    std::size_t lastFrameBytes{0};
     std::string lastEvent = "No events";
     std::string lastProcessedAt;
 };
@@ -38,8 +40,11 @@ struct CameraModeProfile {
 
 struct CameraFeed {
     std::string cameraId;
+    std::string sourceFeedUrl;
     std::string rawFeedUrl;
     std::string streamUrl;
+    std::string frameUrl;
+    std::string audioFeedUrl;
     std::string resolution;
     std::string processingStatus = "Pending";
     CameraModeProfile modeProfile{};
@@ -50,8 +55,11 @@ class Cameras {
 public:
     bool registerFeed(
         const std::string& cameraId,
+        const std::string& sourceFeedUrl,
         const std::string& rawFeedUrl,
         const std::string& streamUrl,
+        const std::string& frameUrl,
+        const std::string& audioFeedUrl,
         const std::string& resolution
     );
 

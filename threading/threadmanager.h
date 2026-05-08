@@ -7,7 +7,6 @@
 #include <cstdint>
 #include <functional>
 #include <future>
-#include <jthread>
 #include <mutex>
 #include <queue>
 #include <memory>
@@ -85,16 +84,16 @@ private:
     std::atomic<bool> running;
 
     std::atomic<JobId> nextJobId;
-    std::mutex backgroundMutex;
+    mutable std::mutex backgroundMutex;
     std::unordered_map<JobId, BackgroundJobSlot> backgroundJobs;
     std::vector<std::jthread> backgroundWorkers;
 
-    std::mutex eventMutex;
+    mutable std::mutex eventMutex;
     std::condition_variable eventCondition;
     std::queue<QueuedTask> eventQueue;
     std::vector<std::jthread> eventWorkers;
 
-    std::mutex userMutex;
+    mutable std::mutex userMutex;
     std::condition_variable userCondition;
     std::queue<QueuedTask> userQueue;
     std::vector<std::jthread> userWorkers;

@@ -77,8 +77,11 @@ std::string serializeCameraFeed(const CameraFeed& feed) {
     std::ostringstream body;
     body << "{"
          << "\"camera_id\":\"" << escapeJson(feed.cameraId) << "\","
+         << "\"source_feed_url\":\"" << escapeJson(feed.sourceFeedUrl) << "\","
          << "\"raw_feed_url\":\"" << escapeJson(feed.rawFeedUrl) << "\","
          << "\"stream_url\":\"" << escapeJson(feed.streamUrl) << "\","
+         << "\"frame_url\":\"" << escapeJson(feed.frameUrl) << "\","
+         << "\"audio_feed_url\":\"" << escapeJson(feed.audioFeedUrl) << "\","
          << "\"resolution\":\"" << escapeJson(feed.resolution) << "\","
          << "\"processing_status\":\"" << escapeJson(feed.processingStatus) << "\","
          << "\"mode\":\"" << escapeJson(Cameras::modeToString(feed.modeProfile.mode)) << "\","
@@ -91,8 +94,25 @@ std::string serializeCameraFeed(const CameraFeed& feed) {
          << "\"familiar_face_detected\":" << (feed.detections.familiarFaceDetected ? "true" : "false") << ","
          << "\"unknown_face_detected\":" << (feed.detections.unknownFaceDetected ? "true" : "false") << ","
          << "\"strange_sound_detected\":" << (feed.detections.strangeSoundDetected ? "true" : "false") << ","
+         << "\"motion_score\":" << feed.detections.motionScore << ","
+         << "\"last_frame_bytes\":" << feed.detections.lastFrameBytes << ","
          << "\"last_event\":\"" << escapeJson(feed.detections.lastEvent) << "\","
          << "\"last_processed_at\":\"" << escapeJson(feed.detections.lastProcessedAt) << "\""
+         << "}";
+    return body.str();
+}
+
+std::string serializeNotification(const Notification& notification) {
+    std::ostringstream body;
+    body << "{"
+         << "\"id\":\"" << escapeJson(notification.id) << "\","
+         << "\"source\":\"" << escapeJson(notification.source) << "\","
+         << "\"severity\":\"" << escapeJson(notification.severity) << "\","
+         << "\"category\":\"" << escapeJson(notification.category) << "\","
+         << "\"title\":\"" << escapeJson(notification.title) << "\","
+         << "\"message\":\"" << escapeJson(notification.message) << "\","
+         << "\"device_id\":\"" << escapeJson(notification.deviceId) << "\","
+         << "\"created_at\":\"" << escapeJson(notification.createdAt) << "\""
          << "}";
     return body.str();
 }
@@ -177,21 +197,56 @@ void Server::handleRequest(const std::string& request, SOCKET clientSocket) {
     if (method == "POST" && path.rfind("/camera/feed/", 0) == 0) {
         const std::string cameraId = path.substr(std::string("/camera/feed/").length());
         const std::string body = extractRequestBody(request);
+        const std::string sourceFeedUrl = extractJsonStringField(body, "source_feed_url");
         const std::string rawFeedUrl = extractJsonStringField(body, "raw_feed_url");
         std::string streamUrl = extractJsonStringField(body, "stream_url");
+        std::string frameUrl = extractJsonStringField(body, "frame_url");
+        const std::string audioFeedUrl = extractJsonStringField(body, "audio_feed_url");
         const std::string resolution = extractJsonStringField(body, "resolution");
 
         if (streamUrl.empty()) {
             streamUrl = rawFeedUrl;
         }
 
-        if (!api.registerCameraFeed(cameraId, rawFeedUrl, streamUrl, resolution)) {
+        if (frameUrl.empty()) {
+            frameUrl = streamUrl;
+        }
+
+        if (!api.registerCameraFeed(cameraId, sourceFeedUrl, rawFeedUrl, streamUrl, frameUrl, audioFeedUrl, resolution)) {
             Logger::instance().warning("Server", "Rejected camera feed POST camera=" + cameraId);
             sendResponse(clientSocket, "{ \"error\": \"invalid camera feed payload\" }", 400, "Bad Request");
             return;
         }
 
         sendResponse(clientSocket, "{ \"status\": \"ok\" }");
+        return;
+    }
+
+    if (method == "GET" && path == "/notifications") {
+        const auto notifications = api.getNotifications();
+        std::string body = "{ \"notifications\": [";
+        for (std::size_t index = 0; index < notifications.size(); ++index) {
+            body += serializeNotification(notifications[index]);
+            if (index + 1 < notifications.size()) {
+                body += ",";
+            }
+        }
+        body += "] }";
+        sendResponse(clientSocket, body);
+        return;
+    }
+
+    if (method == "POST" && path == "/notifications") {
+        const std::string body = extractRequestBody(request);
+        const Notification notification = api.queueNotification(
+            extractJsonStringField(body, "source").empty() ? "hub" : extractJsonStringField(body, "source"),
+            extractJsonStringField(body, "severity").empty() ? "info" : extractJsonStringField(body, "severity"),
+            extractJsonStringField(body, "category").empty() ? "system" : extractJsonStringField(body, "category"),
+            extractJsonStringField(body, "title"),
+            extractJsonStringField(body, "message"),
+            extractJsonStringField(body, "device_id")
+        );
+        sendResponse(clientSocket, "{ \"status\": \"ok\", \"notification_id\": \"" + escapeJson(notification.id) + "\" }");
         return;
     }
 
@@ -223,6 +278,7 @@ void Server::handleRequest(const std::string& request, SOCKET clientSocket) {
 void Server::sendResponse(
     SOCKET clientSocket,
     const std::string& body,
+    const std::string& contentType,
     int statusCode,
     const std::string& statusText
 ) {
@@ -230,15 +286,25 @@ void Server::sendResponse(
         "Server",
         "Sending response statusCode=" + std::to_string(statusCode) +
         " statusText=" + statusText +
+        " contentType=" + contentType +
         " bodyLength=" + std::to_string(body.size())
     );
     const std::string response =
         "HTTP/1.1 " + std::to_string(statusCode) + " " + statusText + "\r\n"
-        "Content-Type: application/json\r\n"
+        "Content-Type: " + contentType + "\r\n"
         "Access-Control-Allow-Origin: *\r\n"
         "Content-Length: " + std::to_string(body.size()) + "\r\n"
         "\r\n" +
         body;
 
     send(clientSocket, response.c_str(), static_cast<int>(response.size()), 0);
+}
+
+void Server::sendResponse(
+    SOCKET clientSocket,
+    const std::string& body,
+    int statusCode,
+    const std::string& statusText
+) {
+    sendResponse(clientSocket, body, "application/json", statusCode, statusText);
 }
