@@ -1,16 +1,42 @@
+#include "accesspoint/api.h"
+#include "accesspoint/server.h"
+#include "logging/logger.h"
+#include "modules/cameras/cameraautomation.h"
+#include "modules/cameras/cameras.h"
+#include "threading/threadmanager.h"
+
+#include <chrono>
 #include <iostream>
 
-// TIP To <b>Run</b> code, press <shortcut actionId="Run"/> or click the <icon src="AllIcons.Actions.Execute"/> icon in the gutter.
 int main() {
-    // TIP Press <shortcut actionId="RenameElement"/> when your caret is at the <b>lang</b> variable name to see how CLion can help you rename it.
-    auto lang = "C++";
-    std::cout << "Hello and welcome to " << lang << "!\n";
+    Logger::instance().initialize("logs/home-automation-hub.log");
+    Logger::instance().info("Main", "Home Automation Hub starting.");
 
-    for (int i = 1; i <= 5; i++) {
-        // TIP Press <shortcut actionId="Debug"/> to start debugging your code. We have set one <icon src="AllIcons.Debugger.Db_set_breakpoint"/> breakpoint for you, but you can always add more by pressing <shortcut actionId="ToggleLineBreakpoint"/>.
-        std::cout << "i = " << i << std::endl;
-    }
+    ThreadManager threadManager;
+    threadManager.registerBackgroundJob({
+        .name = "bridge-poll",
+        .interval = std::chrono::milliseconds(1000),
+        .task = []() {
+            Logger::instance().debug("Main", "Background bridge poll tick.");
+        },
+        .runImmediately = true
+    });
+    threadManager.start();
 
+    Cameras cameras;
+    CameraAutomation cameraAutomation(cameras, threadManager);
+    threadManager.registerBackgroundJob({
+        .name = "camera-analysis",
+        .interval = std::chrono::milliseconds(2000),
+        .task = [&cameraAutomation]() {
+            cameraAutomation.processAllFeeds();
+        },
+        .runImmediately = false
+    });
+    Logger::instance().info("Main", "Camera automation background jobs registered.");
+    API api(cameras, cameraAutomation);
+    Server server(api);
+    server.start(8081);
+    Logger::instance().info("Main", "Home Automation Hub shutting down.");
     return 0;
-    // TIP See CLion help at <a href="https://www.jetbrains.com/help/clion/">jetbrains.com/help/clion/</a>. Also, you can try interactive lessons for CLion by selecting 'Help | Learn IDE Features' from the main menu.
 }

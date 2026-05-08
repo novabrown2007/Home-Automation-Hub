@@ -1,13 +1,20 @@
-//
-// Created by brown on 2026-04-30.
-//
+#pragma once
 
-#ifndef HOME_AUTOMATION_HUB_CAMERAAUTOMATION_H
-#define HOME_AUTOMATION_HUB_CAMERAAUTOMATION_H
+#include <string>
 
+#include "../../threading/threadmanager.h"
+#include "cameras.h"
 
-class cameraautomation {
+class CameraAutomation {
+public:
+    CameraAutomation(Cameras& cameras, ThreadManager& threadManager);
+
+    void scheduleFeedProcessing(const std::string& cameraId);
+    void processAllFeeds();
+
+private:
+    void processFeed(const std::string& cameraId);
+
+    Cameras& cameras;
+    ThreadManager& threadManager;
 };
-
-
-#endif //HOME_AUTOMATION_HUB_CAMERAAUTOMATION_H

@@ -1,14 +1,101 @@
-//
-// This class will be responsible for setting up multi-threading for this project, which is necessary as we'll be simultaneously running ai on several camera feeds, and getting data from the bridge, and sending updates and alerts to the UI, and sending updates to the hardware.
-// We will need more classes in this package to stay organized while managing tasks and scheduling and threads.
-//
+#pragma once
 
-#ifndef HOME_AUTOMATION_HUB_THREADMANAGER_H
-#define HOME_AUTOMATION_HUB_THREADMANAGER_H
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
+#include <cstddef>
+#include <cstdint>
+#include <functional>
+#include <future>
+#include <jthread>
+#include <mutex>
+#include <queue>
+#include <memory>
+#include <string>
+#include <thread>
+#include <unordered_map>
+#include <vector>
 
+class ThreadManager {
+public:
+    using Task = std::function<void()>;
+    using Clock = std::chrono::steady_clock;
+    using Duration = std::chrono::milliseconds;
+    using JobId = std::uint64_t;
 
-class threadmanager {
+    struct BackgroundJob {
+        std::string name;
+        Duration interval{1000};
+        Task task;
+        bool runImmediately{true};
+    };
+
+    ThreadManager();
+    ~ThreadManager();
+
+    ThreadManager(const ThreadManager&) = delete;
+    ThreadManager& operator=(const ThreadManager&) = delete;
+
+    void start(std::size_t eventWorkerCount = 2, std::size_t userWorkerCount = 1);
+    void stop();
+
+    [[nodiscard]] bool isRunning() const;
+
+    JobId registerBackgroundJob(BackgroundJob job);
+    bool removeBackgroundJob(JobId jobId);
+
+    std::future<void> submitEventTask(std::string name, Task task);
+    std::future<void> submitUserTask(std::string name, Task task);
+
+    [[nodiscard]] std::size_t backgroundJobCount() const;
+    [[nodiscard]] std::size_t pendingEventTaskCount() const;
+    [[nodiscard]] std::size_t pendingUserTaskCount() const;
+
+private:
+    struct BackgroundJobSlot {
+        BackgroundJob job;
+        std::shared_ptr<std::atomic<bool>> enabled;
+    };
+
+    struct QueuedTask {
+        std::string name;
+        Task task;
+        std::promise<void> completion;
+    };
+
+    void startBackgroundWorkers();
+    void startQueueWorkers(
+        std::size_t workerCount,
+        std::vector<std::jthread>& workers,
+        std::queue<QueuedTask>& queue,
+        std::mutex& queueMutex,
+        std::condition_variable& queueCondition,
+        const char* workerLabel
+    );
+
+    void runBackgroundJob(
+        const BackgroundJob& job,
+        const std::shared_ptr<std::atomic<bool>>& enabled,
+        std::stop_token stopToken
+    ) const;
+
+    static std::future<void> makeRejectedFuture(const std::string& reason);
+
+    mutable std::mutex lifecycleMutex;
+    std::atomic<bool> running;
+
+    std::atomic<JobId> nextJobId;
+    std::mutex backgroundMutex;
+    std::unordered_map<JobId, BackgroundJobSlot> backgroundJobs;
+    std::vector<std::jthread> backgroundWorkers;
+
+    std::mutex eventMutex;
+    std::condition_variable eventCondition;
+    std::queue<QueuedTask> eventQueue;
+    std::vector<std::jthread> eventWorkers;
+
+    std::mutex userMutex;
+    std::condition_variable userCondition;
+    std::queue<QueuedTask> userQueue;
+    std::vector<std::jthread> userWorkers;
 };
-
-
-#endif //HOME_AUTOMATION_HUB_THREADMANAGER_H
