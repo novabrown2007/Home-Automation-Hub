@@ -27,6 +27,8 @@ set(HUB_SOURCES
         modules/cameras/cameraautomation.h
         modules/cameras/motiondetector.cpp
         modules/cameras/motiondetector.h
+        modules/cameras/sounddetector.cpp
+        modules/cameras/sounddetector.h
         modules/lights/lights.cpp
         modules/lights/lights.h
         modules/routines/routinemanager.cpp
@@ -42,13 +44,13 @@ add_library(HomeAutomationHubLib
 add_executable(Home_Automation_Hub main.cpp)
 
 target_link_libraries(Home_Automation_Hub HomeAutomationHubLib)
-target_link_libraries(HomeAutomationHubLib ws2_32)
-target_link_libraries(Home_Automation_Hub ws2_32)
+target_link_libraries(HomeAutomationHubLib ws2_32 gdiplus ole32)
+target_link_libraries(Home_Automation_Hub ws2_32 gdiplus ole32)
 
 add_executable(HomeAutomationHubTests
         tests/test_main.cpp
 )
 
-target_link_libraries(HomeAutomationHubTests HomeAutomationHubLib ws2_32)
+target_link_libraries(HomeAutomationHubTests HomeAutomationHubLib ws2_32 gdiplus ole32)
 
 add_test(NAME HomeAutomationHubTests COMMAND HomeAutomationHubTests)

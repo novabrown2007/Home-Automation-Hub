@@ -40,6 +40,7 @@ bool Cameras::registerFeed(
         .audioFeedUrl = audioFeedUrl,
         .resolution = resolution,
         .processingStatus = "Registered",
+        .bridgeStreamEnabled = true,
         .modeProfile = buildModeProfile(CameraMode::Home),
         .detections = CameraDetectionState{
             .lastProcessedAt = currentTimestamp(),
@@ -134,12 +135,30 @@ bool Cameras::updateDetectionState(const std::string& cameraId, const CameraDete
         "Camera=" + cameraId +
         " detectionState motion=" + std::string(state.motionDetected ? "true" : "false") +
         " motionScore=" + std::to_string(state.motionScore) +
+        " soundScore=" + std::to_string(state.soundScore) +
         " lastFrameBytes=" + std::to_string(state.lastFrameBytes) +
+        " lastAudioBytes=" + std::to_string(state.lastAudioBytes) +
         " familiarFace=" + std::string(state.familiarFaceDetected ? "true" : "false") +
         " unknownFace=" + std::string(state.unknownFaceDetected ? "true" : "false") +
         " strangeSound=" + std::string(state.strangeSoundDetected ? "true" : "false") +
         " lastEvent=\"" + state.lastEvent + "\"" +
         " processedAt=" + state.lastProcessedAt
+    );
+    return true;
+}
+
+bool Cameras::updateBridgeStreamEnabled(const std::string& cameraId, bool enabled) {
+    std::lock_guard lock(mutex);
+    const auto it = feeds.find(cameraId);
+    if (it == feeds.end()) {
+        Logger::instance().warning("Cameras", "Tried to update bridge stream state for unknown camera=" + cameraId);
+        return false;
+    }
+
+    it->second.bridgeStreamEnabled = enabled;
+    Logger::instance().info(
+        "Cameras",
+        "Camera=" + cameraId + " bridgeStreamEnabled=" + std::string(enabled ? "true" : "false")
     );
     return true;
 }
@@ -155,6 +174,12 @@ CameraModeProfile Cameras::buildModeProfile(CameraMode mode) {
                     .facialRecognitionEnabled = true,
                     .strangeSoundDetectionEnabled = true,
                 },
+                .alerts = CameraAlertPolicy{
+                    .notifyOnMotion = true,
+                    .notifyOnFamiliarFace = true,
+                    .notifyOnUnknownFace = true,
+                    .notifyOnStrangeSound = true,
+                },
                 .description = "No one expected home. Full monitoring and alerting.",
             };
         case CameraMode::Night:
@@ -166,7 +191,13 @@ CameraModeProfile Cameras::buildModeProfile(CameraMode mode) {
                     .facialRecognitionEnabled = true,
                     .strangeSoundDetectionEnabled = true,
                 },
-                .description = "Overnight monitoring with face and sound analysis enabled.",
+                .alerts = CameraAlertPolicy{
+                    .notifyOnMotion = true,
+                    .notifyOnFamiliarFace = false,
+                    .notifyOnUnknownFace = true,
+                    .notifyOnStrangeSound = true,
+                },
+                .description = "Overnight monitoring with alerts for motion, unknown faces, and strange sounds.",
             };
         case CameraMode::Privacy:
             return CameraModeProfile{
@@ -177,7 +208,8 @@ CameraModeProfile Cameras::buildModeProfile(CameraMode mode) {
                     .facialRecognitionEnabled = false,
                     .strangeSoundDetectionEnabled = false,
                 },
-                .description = "Camera retained but analyzers disabled for privacy.",
+                .alerts = CameraAlertPolicy{},
+                .description = "Camera turned off and analyzers disabled for privacy.",
             };
         case CameraMode::Home:
         default:
@@ -186,10 +218,16 @@ CameraModeProfile Cameras::buildModeProfile(CameraMode mode) {
                 .analyzers = CameraAnalyzers{
                     .rawFeedVisible = true,
                     .motionDetectionEnabled = true,
-                    .facialRecognitionEnabled = false,
-                    .strangeSoundDetectionEnabled = false,
+                    .facialRecognitionEnabled = true,
+                    .strangeSoundDetectionEnabled = true,
                 },
-                .description = "Occupants expected home. Basic motion visibility only.",
+                .alerts = CameraAlertPolicy{
+                    .notifyOnMotion = false,
+                    .notifyOnFamiliarFace = false,
+                    .notifyOnUnknownFace = false,
+                    .notifyOnStrangeSound = false,
+                },
+                .description = "Occupants expected home. Suppress alerts but continue logging faces and anomalies.",
             };
     }
 }

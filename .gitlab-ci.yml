@@ -1,0 +1,82 @@
+stages:
+  - test
+  - trigger
+  - notify
+
+variables:
+  GIT_STRATEGY: fetch
+  BRIDGE_REPO_URL: "https://gitlab.com/home-automation530818/Home-Automation-Bridge.git"
+  BRIDGE_REPO_BRANCH: "master"
+  BRIDGE_REPO_DIR: "Home Automation Bridge"
+  BRIDGE_PROJECT_PATH: "home-automation530818/Home-Automation-Bridge"
+  HUB_REPO_URL: "https://gitlab.com/home-automation530818/home-automation-hub.git"
+  HUB_REPO_BRANCH: "master"
+  HUB_REPO_DIR: "Home Automation Hub"
+  HUB_PROJECT_PATH: "home-automation530818/home-automation-hub"
+  UI_REPO_URL: "https://gitlab.com/home-automation530818/home-automation-ui.git"
+  UI_PROJECT_PATH: "home-automation530818/home-automation-ui"
+  UI_REPO_BRANCH: "master"
+  UI_REPO_DIR: "Home Automation UI"
+
+bridge_hub_smoketest:
+  stage: test
+  tags:
+    - windows
+  before_script:
+    - $ErrorActionPreference = "Stop"
+    - $workspaceRoot = Split-Path -Parent $env:CI_PROJECT_DIR
+    - $bridgePath = Join-Path $workspaceRoot $env:BRIDGE_REPO_DIR
+    - if (Test-Path $bridgePath) { Remove-Item -LiteralPath $bridgePath -Recurse -Force }
+    - git clone --depth 1 --branch $env:BRIDGE_REPO_BRANCH $env:BRIDGE_REPO_URL $bridgePath
+  script:
+    - $bridgePath = Join-Path (Split-Path -Parent $env:CI_PROJECT_DIR) $env:BRIDGE_REPO_DIR
+    - powershell -ExecutionPolicy Bypass -File (Join-Path $bridgePath "tools\integration_smoketest.ps1")
+  after_script:
+    - $artifactRoot = Join-Path $env:CI_PROJECT_DIR "ci-artifacts"
+    - New-Item -ItemType Directory -Force -Path $artifactRoot | Out-Null
+    - $bridgePath = Join-Path (Split-Path -Parent $env:CI_PROJECT_DIR) $env:BRIDGE_REPO_DIR
+    - $bridgeLogDir = Join-Path $bridgePath "cmake-build-mingw\logs"
+    - $hubLogDir = Join-Path $env:CI_PROJECT_DIR "cmake-build-mingw\logs"
+    - if (Test-Path $bridgeLogDir) { Copy-Item -Path $bridgeLogDir -Destination (Join-Path $artifactRoot "bridge-logs") -Recurse -Force }
+    - if (Test-Path $hubLogDir) { Copy-Item -Path $hubLogDir -Destination (Join-Path $artifactRoot "hub-logs") -Recurse -Force }
+    - if (Test-Path $bridgePath) { Remove-Item -LiteralPath $bridgePath -Recurse -Force }
+  artifacts:
+    when: always
+    expire_in: 7 days
+    paths:
+      - ci-artifacts/
+      - docs/ci-smoketest.md
+  rules:
+    - when: on_success
+
+trigger_bridge_pipeline:
+  stage: trigger
+  trigger:
+    project: $BRIDGE_PROJECT_PATH
+    branch: $BRIDGE_REPO_BRANCH
+    strategy: depend
+  rules:
+    - if: '$CI_PIPELINE_SOURCE != "pipeline"'
+
+trigger_ui_pipeline:
+  stage: trigger
+  trigger:
+    project: $UI_PROJECT_PATH
+    branch: $UI_REPO_BRANCH
+    strategy: depend
+  rules:
+    - if: '$CI_PIPELINE_SOURCE != "pipeline"'
+
+notify_discord_suite_build:
+  stage: notify
+  tags:
+    - windows
+  script:
+    - powershell -ExecutionPolicy Bypass -File ".\.gitlab\ci\build_suite_and_notify.ps1"
+  artifacts:
+    when: always
+    expire_in: 7 days
+    paths:
+      - suite-artifacts/
+  rules:
+    - if: '$CI_PIPELINE_SOURCE != "pipeline"'

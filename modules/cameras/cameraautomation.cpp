@@ -3,6 +3,11 @@
 #include "../../logging/logger.h"
 #include "../../network/httpclient.h"
 
+namespace {
+constexpr auto kSoundAlertLatchWindow = std::chrono::seconds(8);
+constexpr auto kSoundNotificationCooldown = std::chrono::seconds(12);
+}
+
 CameraAutomation::CameraAutomation(Cameras& cameras, ThreadManager& threadManager, NotificationCenter& notifications, BridgeNotifier& bridgeNotifier)
     : cameras(cameras), threadManager(threadManager), notifications(notifications), bridgeNotifier(bridgeNotifier) {}
 
@@ -38,7 +43,9 @@ void CameraAutomation::processFeed(const std::string& cameraId) {
         " rawFeedUrl=" + feed.rawFeedUrl +
         " streamUrl=" + feed.streamUrl +
         " frameUrl=" + feed.frameUrl +
+        " audioFeedUrl=" + feed.audioFeedUrl +
         " mode=" + Cameras::modeToString(feed.modeProfile.mode) +
+        " bridgeStreamEnabled=" + std::string(feed.bridgeStreamEnabled ? "true" : "false") +
         " rawFeedVisible=" + std::string(feed.modeProfile.analyzers.rawFeedVisible ? "true" : "false") +
         " motionDetectionEnabled=" + std::string(feed.modeProfile.analyzers.motionDetectionEnabled ? "true" : "false") +
         " facialRecognitionEnabled=" + std::string(feed.modeProfile.analyzers.facialRecognitionEnabled ? "true" : "false") +
@@ -52,45 +59,52 @@ void CameraAutomation::processFeed(const std::string& cameraId) {
     detectionState.unknownFaceDetected = false;
     detectionState.strangeSoundDetected = false;
     detectionState.motionScore = 0.0;
+    detectionState.soundScore = 0.0;
     detectionState.lastFrameBytes = 0;
+    detectionState.lastAudioBytes = 0;
     detectionState.lastEvent = "Analyzers idle";
 
-    const CameraAnalyzers& analyzers = feed.modeProfile.analyzers;
+    const CameraModeProfile& modeProfile = feed.modeProfile;
+    const CameraAnalyzers& analyzers = modeProfile.analyzers;
+    const CameraAlertPolicy& alerts = modeProfile.alerts;
+
     if (!analyzers.rawFeedVisible) {
+        ensureBridgeCameraState(feed, false);
         detectionState.lastEvent = "Privacy mode active";
-        Logger::instance().info("CameraAutomation", "Camera=" + cameraId + " is in privacy mode; raw feed visibility disabled");
+        Logger::instance().info("CameraAutomation", "Camera=" + cameraId + " privacy mode active; bridge stream disabled");
         cameras.updateDetectionState(cameraId, detectionState);
-        cameras.updateProcessingStatus(cameraId, "Ready");
+        cameras.updateProcessingStatus(cameraId, "Disabled");
         return;
     }
 
-    const HttpResponse frameResponse = HttpClient::get(feed.frameUrl);
-    if (!frameResponse.ok()) {
-        detectionState.lastEvent = "Frame fetch failed";
-        cameras.updateDetectionState(cameraId, detectionState);
-        cameras.updateProcessingStatus(cameraId, "Capture Failed");
-
-        const Notification notification = notifications.enqueue(
-            "hub",
-            "warning",
-            "camera",
-            "Camera frame fetch failed",
-            "The hub could not fetch the latest frame from the bridge.",
-            cameraId
-        );
-        bridgeNotifier.publish(notification);
-        Logger::instance().warning(
-            "CameraAutomation",
-            "Frame fetch failed for camera=" + cameraId +
-            " statusCode=" + std::to_string(frameResponse.statusCode) +
-            " statusText=" + frameResponse.statusText
-        );
-        return;
-    }
-
-    detectionState.lastFrameBytes = frameResponse.body.size();
+    ensureBridgeCameraState(feed, true);
 
     if (analyzers.motionDetectionEnabled) {
+        const HttpResponse frameResponse = HttpClient::get(feed.frameUrl);
+        if (!frameResponse.ok()) {
+            detectionState.lastEvent = "Frame fetch failed";
+            cameras.updateDetectionState(cameraId, detectionState);
+            cameras.updateProcessingStatus(cameraId, "Capture Failed");
+
+            const Notification notification = notifications.enqueue(
+                "hub",
+                "warning",
+                "camera",
+                "Camera frame fetch failed",
+                "The hub could not fetch the latest frame from the bridge.",
+                cameraId
+            );
+            bridgeNotifier.publish(notification);
+            Logger::instance().warning(
+                "CameraAutomation",
+                "Frame fetch failed for camera=" + cameraId +
+                " statusCode=" + std::to_string(frameResponse.statusCode) +
+                " statusText=" + frameResponse.statusText
+            );
+            return;
+        }
+
+        detectionState.lastFrameBytes = frameResponse.body.size();
         const MotionResult motion = motionDetector.analyzeFrame(cameraId, frameResponse.body);
         detectionState.motionScore = motion.score;
         detectionState.motionDetected = motion.detected;
@@ -105,17 +119,83 @@ void CameraAutomation::processFeed(const std::string& cameraId) {
 
         if (motion.detected) {
             detectionState.lastEvent = "Motion detected";
-            const Notification notification = notifications.enqueue(
-                "hub",
-                "warning",
-                "camera",
-                "Motion detected",
-                "Motion detected for " + cameraId + ".",
-                cameraId
-            );
-            bridgeNotifier.publish(notification);
             Logger::instance().warning("CameraAutomation", "Trigger fired for camera=" + cameraId + ": motion detected");
+            if (alerts.notifyOnMotion) {
+                const Notification notification = notifications.enqueue(
+                    "hub",
+                    notificationSeverity(modeProfile, "motion"),
+                    "camera",
+                    "Motion detected",
+                    "Motion detected for " + cameraId + ".",
+                    cameraId
+                );
+                bridgeNotifier.publish(notification);
+            }
         }
+    }
+
+    if (analyzers.strangeSoundDetectionEnabled) {
+        if (feed.audioFeedUrl.empty()) {
+            Logger::instance().debug("CameraAutomation", "No audioFeedUrl configured for camera=" + cameraId + "; skipping sound analysis.");
+        } else {
+            const HttpResponse audioResponse = HttpClient::get(feed.audioFeedUrl);
+            if (!audioResponse.ok()) {
+                Logger::instance().warning(
+                    "CameraAutomation",
+                    "Audio fetch failed for camera=" + cameraId +
+                    " statusCode=" + std::to_string(audioResponse.statusCode) +
+                    " statusText=" + audioResponse.statusText
+                );
+            } else {
+                detectionState.lastAudioBytes = audioResponse.body.size();
+                const SoundResult sound = soundDetector.analyzeClip(cameraId, audioResponse.body);
+                detectionState.soundScore = sound.score;
+                const auto now = std::chrono::steady_clock::now();
+                const bool soundAlertAlreadyActive = sound.detected ? activateSoundAlert(cameraId, now) : shouldKeepSoundAlertActive(cameraId, now);
+                detectionState.strangeSoundDetected = sound.detected || shouldKeepSoundAlertActive(cameraId, now);
+                if (detectionState.strangeSoundDetected && feed.detections.soundScore > detectionState.soundScore) {
+                    detectionState.soundScore = feed.detections.soundScore;
+                }
+
+                Logger::instance().info(
+                    "CameraAutomation",
+                    "Sound analysis for camera=" + cameraId +
+                    " score=" + std::to_string(sound.score) +
+                    " sampledBytes=" + std::to_string(sound.sampledBytes) +
+                    " detected=" + std::string(sound.detected ? "true" : "false") +
+                    " latched=" + std::string(detectionState.strangeSoundDetected ? "true" : "false") +
+                    (sound.error.empty() ? "" : " error=" + sound.error)
+                );
+
+                if (!sound.error.empty()) {
+                    detectionState.lastEvent = "Sound analyzer unavailable";
+                } else if (sound.detected) {
+                    detectionState.lastEvent = "Strange sound detected";
+                    Logger::instance().warning("CameraAutomation", "Trigger fired for camera=" + cameraId + ": strange sound detected");
+                    if (!soundAlertAlreadyActive && alerts.notifyOnStrangeSound && shouldPublishSoundNotification(cameraId, now)) {
+                        const Notification notification = notifications.enqueue(
+                            "hub",
+                            notificationSeverity(modeProfile, "sound"),
+                            "camera",
+                            "Strange sound detected",
+                            "A sound anomaly was detected for " + cameraId + ".",
+                            cameraId
+                        );
+                        bridgeNotifier.publish(notification);
+                    }
+                } else if (detectionState.strangeSoundDetected) {
+                    detectionState.lastEvent = "Strange sound detected";
+                    Logger::instance().debug("CameraAutomation", "Sound alert remains latched for camera=" + cameraId);
+                }
+            }
+        }
+    }
+
+    if (analyzers.facialRecognitionEnabled) {
+        Logger::instance().info(
+            "CameraAutomation",
+            "Facial recognition requested for camera=" + cameraId + " but no native recognizer is configured yet."
+        );
     }
 
     if (detectionState.lastEvent == "Analyzers idle") {
@@ -126,4 +206,86 @@ void CameraAutomation::processFeed(const std::string& cameraId) {
     cameras.updateDetectionState(cameraId, detectionState);
     cameras.updateProcessingStatus(cameraId, "Ready");
     Logger::instance().info("CameraAutomation", "Finished processing camera=" + cameraId + " with lastEvent=\"" + detectionState.lastEvent + "\"");
+}
+
+void CameraAutomation::ensureBridgeCameraState(const CameraFeed& feed, bool shouldBeStreaming) {
+    if (feed.bridgeStreamEnabled == shouldBeStreaming) {
+        return;
+    }
+
+    const std::string action = shouldBeStreaming ? "start" : "stop";
+    const std::string controlUrl = deriveBridgeControlUrl(feed, action);
+    if (controlUrl.empty()) {
+        Logger::instance().warning(
+            "CameraAutomation",
+            "Unable to derive bridge control URL for camera=" + feed.cameraId + " action=" + action
+        );
+        return;
+    }
+
+    const HttpResponse response = HttpClient::postJson(controlUrl, "");
+    if (!response.ok()) {
+        Logger::instance().warning(
+            "CameraAutomation",
+            "Bridge camera control failed for camera=" + feed.cameraId +
+            " action=" + action +
+            " statusCode=" + std::to_string(response.statusCode) +
+            " statusText=" + response.statusText
+        );
+        return;
+    }
+
+    cameras.updateBridgeStreamEnabled(feed.cameraId, shouldBeStreaming);
+    Logger::instance().info(
+        "CameraAutomation",
+        "Bridge camera control succeeded for camera=" + feed.cameraId + " action=" + action
+    );
+}
+
+std::string CameraAutomation::deriveBridgeControlUrl(const CameraFeed& feed, const std::string& action) const {
+    const std::string marker = "/camera/frame/" + feed.cameraId;
+    const std::size_t markerPos = feed.frameUrl.find(marker);
+    if (markerPos != std::string::npos) {
+        return feed.frameUrl.substr(0, markerPos) + "/camera/" + action + "/" + feed.cameraId;
+    }
+
+    const std::string streamMarker = "/camera/stream/" + feed.cameraId;
+    const std::size_t streamPos = feed.streamUrl.find(streamMarker);
+    if (streamPos != std::string::npos) {
+        return feed.streamUrl.substr(0, streamPos) + "/camera/" + action + "/" + feed.cameraId;
+    }
+
+    return {};
+}
+
+std::string CameraAutomation::notificationSeverity(const CameraModeProfile& modeProfile, const std::string& category) const {
+    if (modeProfile.mode == CameraMode::Night && (category == "motion" || category == "sound" || category == "unknown-face")) {
+        return "critical";
+    }
+    return category == "sound" ? "warning" : "warning";
+}
+
+bool CameraAutomation::shouldKeepSoundAlertActive(const std::string& cameraId, std::chrono::steady_clock::time_point now) {
+    std::lock_guard lock(soundStateMutex);
+    const auto it = soundAlertActiveUntil.find(cameraId);
+    return it != soundAlertActiveUntil.end() && now < it->second;
+}
+
+bool CameraAutomation::shouldPublishSoundNotification(const std::string& cameraId, std::chrono::steady_clock::time_point now) {
+    std::lock_guard lock(soundStateMutex);
+    const auto it = soundNotificationCooldownUntil.find(cameraId);
+    if (it != soundNotificationCooldownUntil.end() && now < it->second) {
+        return false;
+    }
+
+    soundNotificationCooldownUntil[cameraId] = now + kSoundNotificationCooldown;
+    return true;
+}
+
+bool CameraAutomation::activateSoundAlert(const std::string& cameraId, std::chrono::steady_clock::time_point now) {
+    std::lock_guard lock(soundStateMutex);
+    const auto current = soundAlertActiveUntil.find(cameraId);
+    const bool alreadyActive = current != soundAlertActiveUntil.end() && now < current->second;
+    soundAlertActiveUntil[cameraId] = now + kSoundAlertLatchWindow;
+    return alreadyActive;
 }

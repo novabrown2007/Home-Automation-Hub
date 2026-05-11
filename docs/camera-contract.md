@@ -17,16 +17,18 @@
   "stream_url": "http://127.0.0.1:8080/camera/stream/bedroomcamera",
   "frame_url": "http://127.0.0.1:8080/camera/frame/bedroomcamera",
   "audio_feed_url": "",
+  "normalized_frame_format": "jpeg",
   "resolution": "1080p"
 }
 ```
 
 ## Current ingest rules
 
-- `frame_url` is required for Hub-side processing.
+- `frame_url` is required for Hub-side processing and must return JPEG image bytes.
 - `audio_feed_url` is reserved for strange-sound detection and may be empty.
 - Current motion detection operates on proxied frame bytes pulled from `frame_url`.
-- Current feed support assumes `http://` camera frames. `https://`, `rtsp://`, and long-lived MJPEG parsing are not implemented yet.
+- Current Bridge-side normalization supports camera sources in `mjpg`/`mjpeg` and `yuy2`.
+- `https://`, `rtsp://`, and long-lived MJPEG streaming are not implemented yet.
 
 ## Modes
 

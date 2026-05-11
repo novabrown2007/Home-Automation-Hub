@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstring>
 #include <sstream>
 #include <string>
 
@@ -168,19 +169,51 @@ HttpResponse sendRequest(const std::string& method, const std::string& url, cons
     request << "\r\n" << body;
 
     const std::string requestText = request.str();
-    if (send(clientSocket, requestText.c_str(), static_cast<int>(requestText.size()), 0) == SOCKET_ERROR) {
-        closesocket(clientSocket);
-        return HttpResponse{
-            .statusCode = 0,
-            .statusText = "Send failed",
-        };
+    std::size_t sentTotal = 0;
+    while (sentTotal < requestText.size()) {
+        const int sent = send(
+            clientSocket,
+            requestText.data() + sentTotal,
+            static_cast<int>(requestText.size() - sentTotal),
+            0
+        );
+        if (sent == SOCKET_ERROR || sent <= 0) {
+            closesocket(clientSocket);
+            return HttpResponse{
+                .statusCode = 0,
+                .statusText = "Send failed",
+            };
+        }
+        sentTotal += static_cast<std::size_t>(sent);
     }
+
+    shutdown(clientSocket, SD_SEND);
+
+    timeval timeout{};
+    timeout.tv_sec = 5;
+    timeout.tv_usec = 0;
+    setsockopt(clientSocket, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&timeout), sizeof(timeout));
+    setsockopt(clientSocket, SOL_SOCKET, SO_SNDTIMEO, reinterpret_cast<const char*>(&timeout), sizeof(timeout));
 
     std::string rawResponse;
     char buffer[4096];
-    int received = 0;
-    while ((received = recv(clientSocket, buffer, sizeof(buffer), 0)) > 0) {
-        rawResponse.append(buffer, received);
+    while (true) {
+        const int received = recv(clientSocket, buffer, sizeof(buffer), 0);
+        if (received > 0) {
+            rawResponse.append(buffer, received);
+            continue;
+        }
+
+        if (received == 0) {
+            break;
+        }
+
+        const int error = WSAGetLastError();
+        closesocket(clientSocket);
+        return HttpResponse{
+            .statusCode = 0,
+            .statusText = error == WSAETIMEDOUT ? "Receive timed out" : "Receive failed",
+        };
     }
     closesocket(clientSocket);
 

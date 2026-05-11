@@ -1,0 +1,6 @@
+#!/bin/sh
+
+SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
+REPO_ROOT=$(cd "$SCRIPT_DIR/.." && pwd)
+
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$REPO_ROOT/tools/discord_git_hook.ps1" post-commit

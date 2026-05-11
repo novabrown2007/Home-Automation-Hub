@@ -21,13 +21,22 @@ struct CameraAnalyzers {
     bool strangeSoundDetectionEnabled{false};
 };
 
+struct CameraAlertPolicy {
+    bool notifyOnMotion{false};
+    bool notifyOnFamiliarFace{false};
+    bool notifyOnUnknownFace{false};
+    bool notifyOnStrangeSound{false};
+};
+
 struct CameraDetectionState {
     bool motionDetected{false};
     bool familiarFaceDetected{false};
     bool unknownFaceDetected{false};
     bool strangeSoundDetected{false};
     double motionScore{0.0};
+    double soundScore{0.0};
     std::size_t lastFrameBytes{0};
+    std::size_t lastAudioBytes{0};
     std::string lastEvent = "No events";
     std::string lastProcessedAt;
 };
@@ -35,6 +44,7 @@ struct CameraDetectionState {
 struct CameraModeProfile {
     CameraMode mode{CameraMode::Home};
     CameraAnalyzers analyzers{};
+    CameraAlertPolicy alerts{};
     std::string description{"Occupants home. Minimal alerting."};
 };
 
@@ -47,6 +57,7 @@ struct CameraFeed {
     std::string audioFeedUrl;
     std::string resolution;
     std::string processingStatus = "Pending";
+    bool bridgeStreamEnabled{true};
     CameraModeProfile modeProfile{};
     CameraDetectionState detections{};
 };
@@ -69,6 +80,7 @@ public:
     bool updateProcessingStatus(const std::string& cameraId, const std::string& status);
     bool setMode(const std::string& cameraId, CameraMode mode);
     bool updateDetectionState(const std::string& cameraId, const CameraDetectionState& state);
+    bool updateBridgeStreamEnabled(const std::string& cameraId, bool enabled);
 
     [[nodiscard]] static CameraModeProfile buildModeProfile(CameraMode mode);
     [[nodiscard]] static std::string modeToString(CameraMode mode);

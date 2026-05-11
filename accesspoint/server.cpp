@@ -48,6 +48,66 @@ std::string extractRequestBody(const std::string& request) {
     return request.substr(pos + separator.size());
 }
 
+std::size_t extractContentLength(const std::string& request) {
+    const std::string token = "Content-Length:";
+    const std::size_t headerPos = request.find(token);
+    if (headerPos == std::string::npos) {
+        return 0;
+    }
+
+    const std::size_t valueStart = request.find_first_of("0123456789", headerPos + token.size());
+    if (valueStart == std::string::npos) {
+        return 0;
+    }
+
+    const std::size_t valueEnd = request.find_first_not_of("0123456789", valueStart);
+    try {
+        return static_cast<std::size_t>(std::stoul(request.substr(valueStart, valueEnd - valueStart)));
+    } catch (...) {
+        return 0;
+    }
+}
+
+std::string receiveRequest(SOCKET clientSocket) {
+    std::string request;
+    char buffer[4096];
+    std::size_t expectedBodyLength = 0;
+    bool headersParsed = false;
+
+    while (true) {
+        const int received = recv(clientSocket, buffer, sizeof(buffer), 0);
+        if (received <= 0) {
+            break;
+        }
+
+        request.append(buffer, received);
+
+        if (!headersParsed) {
+            const std::size_t separatorPos = request.find("\r\n\r\n");
+            if (separatorPos != std::string::npos) {
+                headersParsed = true;
+                expectedBodyLength = extractContentLength(request);
+                const std::size_t currentBodyLength = request.size() - (separatorPos + 4);
+                if (currentBodyLength >= expectedBodyLength) {
+                    break;
+                }
+            }
+        } else {
+            const std::size_t separatorPos = request.find("\r\n\r\n");
+            const std::size_t currentBodyLength = separatorPos == std::string::npos ? 0 : request.size() - (separatorPos + 4);
+            if (currentBodyLength >= expectedBodyLength) {
+                break;
+            }
+        }
+
+        if (received < static_cast<int>(sizeof(buffer)) && headersParsed && expectedBodyLength == 0) {
+            break;
+        }
+    }
+
+    return request;
+}
+
 std::string extractJsonStringField(const std::string& body, const std::string& key) {
     const std::string token = "\"" + key + "\"";
     const size_t keyPos = body.find(token);
@@ -84,18 +144,25 @@ std::string serializeCameraFeed(const CameraFeed& feed) {
          << "\"audio_feed_url\":\"" << escapeJson(feed.audioFeedUrl) << "\","
          << "\"resolution\":\"" << escapeJson(feed.resolution) << "\","
          << "\"processing_status\":\"" << escapeJson(feed.processingStatus) << "\","
+         << "\"bridge_stream_enabled\":" << (feed.bridgeStreamEnabled ? "true" : "false") << ","
          << "\"mode\":\"" << escapeJson(Cameras::modeToString(feed.modeProfile.mode)) << "\","
          << "\"mode_description\":\"" << escapeJson(feed.modeProfile.description) << "\","
          << "\"raw_feed_visible\":" << (feed.modeProfile.analyzers.rawFeedVisible ? "true" : "false") << ","
          << "\"motion_detection_enabled\":" << (feed.modeProfile.analyzers.motionDetectionEnabled ? "true" : "false") << ","
          << "\"facial_recognition_enabled\":" << (feed.modeProfile.analyzers.facialRecognitionEnabled ? "true" : "false") << ","
          << "\"strange_sound_detection_enabled\":" << (feed.modeProfile.analyzers.strangeSoundDetectionEnabled ? "true" : "false") << ","
+         << "\"notify_on_motion\":" << (feed.modeProfile.alerts.notifyOnMotion ? "true" : "false") << ","
+         << "\"notify_on_familiar_face\":" << (feed.modeProfile.alerts.notifyOnFamiliarFace ? "true" : "false") << ","
+         << "\"notify_on_unknown_face\":" << (feed.modeProfile.alerts.notifyOnUnknownFace ? "true" : "false") << ","
+         << "\"notify_on_strange_sound\":" << (feed.modeProfile.alerts.notifyOnStrangeSound ? "true" : "false") << ","
          << "\"motion_detected\":" << (feed.detections.motionDetected ? "true" : "false") << ","
          << "\"familiar_face_detected\":" << (feed.detections.familiarFaceDetected ? "true" : "false") << ","
          << "\"unknown_face_detected\":" << (feed.detections.unknownFaceDetected ? "true" : "false") << ","
          << "\"strange_sound_detected\":" << (feed.detections.strangeSoundDetected ? "true" : "false") << ","
          << "\"motion_score\":" << feed.detections.motionScore << ","
+         << "\"sound_score\":" << feed.detections.soundScore << ","
          << "\"last_frame_bytes\":" << feed.detections.lastFrameBytes << ","
+         << "\"last_audio_bytes\":" << feed.detections.lastAudioBytes << ","
          << "\"last_event\":\"" << escapeJson(feed.detections.lastEvent) << "\","
          << "\"last_processed_at\":\"" << escapeJson(feed.detections.lastProcessedAt) << "\""
          << "}";
@@ -120,28 +187,50 @@ std::string serializeNotification(const Notification& notification) {
 
 void Server::start(int port) {
     WSADATA wsaData;
-    WSAStartup(MAKEWORD(2, 2), &wsaData);
+    if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
+        Logger::instance().error("Server", "WSAStartup failed.");
+        return;
+    }
 
     SOCKET serverSocket = socket(AF_INET, SOCK_STREAM, 0);
+    if (serverSocket == INVALID_SOCKET) {
+        Logger::instance().error("Server", "socket() failed with error=" + std::to_string(WSAGetLastError()));
+        WSACleanup();
+        return;
+    }
 
     sockaddr_in serverAddress{};
     serverAddress.sin_family = AF_INET;
     serverAddress.sin_addr.s_addr = INADDR_ANY;
     serverAddress.sin_port = htons(port);
 
-    bind(serverSocket, reinterpret_cast<sockaddr*>(&serverAddress), sizeof(serverAddress));
-    listen(serverSocket, 10);
+    if (bind(serverSocket, reinterpret_cast<sockaddr*>(&serverAddress), sizeof(serverAddress)) == SOCKET_ERROR) {
+        Logger::instance().error("Server", "bind() failed on port " + std::to_string(port) + " error=" + std::to_string(WSAGetLastError()));
+        closesocket(serverSocket);
+        WSACleanup();
+        return;
+    }
+
+    if (listen(serverSocket, 10) == SOCKET_ERROR) {
+        Logger::instance().error("Server", "listen() failed on port " + std::to_string(port) + " error=" + std::to_string(WSAGetLastError()));
+        closesocket(serverSocket);
+        WSACleanup();
+        return;
+    }
 
     Logger::instance().info("Server", "Home Automation Hub API starting on port " + std::to_string(port));
 
     while (true) {
         SOCKET clientSocket = accept(serverSocket, nullptr, nullptr);
+        if (clientSocket == INVALID_SOCKET) {
+            Logger::instance().warning("Server", "accept() failed error=" + std::to_string(WSAGetLastError()));
+            continue;
+        }
 
-        char buffer[4096] = {};
-        recv(clientSocket, buffer, sizeof(buffer), 0);
+        const std::string request = receiveRequest(clientSocket);
         Logger::instance().debug("Server", "Received raw request bytes from client.");
 
-        handleRequest(std::string(buffer), clientSocket);
+        handleRequest(request, clientSocket);
 
         closesocket(clientSocket);
     }

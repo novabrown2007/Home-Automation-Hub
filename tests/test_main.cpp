@@ -8,6 +8,8 @@
 #include "../logging/logger.h"
 #include "../modules/cameras/cameraautomation.h"
 #include "../modules/cameras/cameras.h"
+#include "../modules/cameras/motiondetector.h"
+#include "../modules/cameras/sounddetector.h"
 #include "../notifications/bridgenotifier.h"
 #include "../notifications/notifications.h"
 #include "../threading/threadmanager.h"
@@ -22,6 +24,41 @@ void require(bool condition, const std::string& message) {
     }
 }
 
+std::string buildMonoPcm16Wav(const std::vector<int16_t>& samples) {
+    std::string wav;
+    const uint32_t dataSize = static_cast<uint32_t>(samples.size() * sizeof(int16_t));
+    const uint32_t riffSize = 36u + dataSize;
+
+    auto append16 = [&wav](uint16_t value) {
+        wav.push_back(static_cast<char>(value & 0xFF));
+        wav.push_back(static_cast<char>((value >> 8) & 0xFF));
+    };
+    auto append32 = [&wav](uint32_t value) {
+        wav.push_back(static_cast<char>(value & 0xFF));
+        wav.push_back(static_cast<char>((value >> 8) & 0xFF));
+        wav.push_back(static_cast<char>((value >> 16) & 0xFF));
+        wav.push_back(static_cast<char>((value >> 24) & 0xFF));
+    };
+
+    wav += "RIFF";
+    append32(riffSize);
+    wav += "WAVE";
+    wav += "fmt ";
+    append32(16);
+    append16(1);
+    append16(1);
+    append32(8000);
+    append32(16000);
+    append16(2);
+    append16(16);
+    wav += "data";
+    append32(dataSize);
+    for (const int16_t sample : samples) {
+        append16(static_cast<uint16_t>(sample));
+    }
+    return wav;
+}
+
 void test_cameras_register_feed_and_defaults() {
     Cameras cameras;
 
@@ -32,7 +69,8 @@ void test_cameras_register_feed_and_defaults() {
     require(feed.cameraId == "bedroomcamera", "Camera feed should be stored.");
     require(feed.modeProfile.mode == CameraMode::Home, "New camera feed should default to home mode.");
     require(feed.modeProfile.analyzers.motionDetectionEnabled, "Home mode should enable motion detection.");
-    require(!feed.modeProfile.analyzers.facialRecognitionEnabled, "Home mode should not enable facial recognition by default.");
+    require(feed.modeProfile.analyzers.facialRecognitionEnabled, "Home mode should keep facial recognition enabled for logging.");
+    require(!feed.modeProfile.alerts.notifyOnMotion, "Home mode should suppress motion notifications.");
 }
 
 void test_camera_modes_change_analyzer_profile() {
@@ -44,6 +82,8 @@ void test_camera_modes_change_analyzer_profile() {
     require(awayFeed.modeProfile.analyzers.motionDetectionEnabled, "Away mode should enable motion detection.");
     require(awayFeed.modeProfile.analyzers.facialRecognitionEnabled, "Away mode should enable facial recognition.");
     require(awayFeed.modeProfile.analyzers.strangeSoundDetectionEnabled, "Away mode should enable strange sound detection.");
+    require(awayFeed.modeProfile.alerts.notifyOnMotion, "Away mode should notify on motion.");
+    require(awayFeed.modeProfile.alerts.notifyOnUnknownFace, "Away mode should notify on unknown faces.");
 
     require(cameras.setMode("bedroomcamera", CameraMode::Privacy), "Privacy mode should be accepted.");
     const CameraFeed privacyFeed = cameras.getFeed("bedroomcamera");
@@ -97,6 +137,22 @@ void test_motion_detector_uses_real_frame_bytes() {
     require(changed.detected, "Changed frame bytes should detect motion.");
     require(changed.score > 0.12, "Changed frame bytes should exceed the motion threshold.");
 }
+
+void test_frame_analyzer_parses_helper_output() {
+    SoundDetector detector;
+
+    const std::string quietWav = buildMonoPcm16Wav(std::vector<int16_t>(128, 0));
+    const std::string loudWav = buildMonoPcm16Wav(std::vector<int16_t>(128, 30000));
+
+    const SoundResult baseline = detector.analyzeClip("bedroomcamera", quietWav);
+    require(baseline.error.empty(), "Sound detector should decode a PCM WAV clip. error=" + baseline.error);
+    require(!baseline.detected, "Baseline quiet clip should not trigger sound anomaly.");
+
+    const SoundResult changed = detector.analyzeClip("bedroomcamera", loudWav);
+    require(changed.error.empty(), "Sound detector should decode the second PCM WAV clip. error=" + changed.error);
+    require(changed.detected, "Louder follow-up clip should trigger sound anomaly detection.");
+    require(changed.score > baseline.score, "Louder clip should produce a higher RMS score.");
+}
 }
 
 int main() {
@@ -104,6 +160,7 @@ int main() {
     test_camera_modes_change_analyzer_profile();
     test_api_and_camera_automation_generate_detection_events();
     test_motion_detector_uses_real_frame_bytes();
+    test_frame_analyzer_parses_helper_output();
 
     if (failures > 0) {
         std::cerr << failures << " hub test(s) failed.\n";

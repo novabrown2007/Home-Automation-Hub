@@ -1,0 +1,4 @@
+.venv-cv/
+runtime/
+cmake-build-*/
+models/
