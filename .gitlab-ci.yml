@@ -1,4 +1,5 @@
 stages:
+  - remote-notify
   - test
   - trigger
   - notify
@@ -17,6 +18,23 @@ variables:
   UI_PROJECT_PATH: "home-automation530818/home-automation-ui"
   UI_REPO_BRANCH: "master"
   UI_REPO_DIR: "Home Automation UI"
+
+notify_discord_remote_git_activity:
+  stage: remote-notify
+  image: curlimages/curl:8.8.0
+  script:
+    - |
+      payload=$(printf '{"username":"Home Automation GitLab","content":"Remote git activity\nRepo: %s\nBranch: %s\nCommit: %s\nAuthor: %s\nSource: %s\nTitle: %s\nPipeline: %s"}' \
+        "$CI_PROJECT_PATH" \
+        "$CI_COMMIT_REF_NAME" \
+        "$CI_COMMIT_SHORT_SHA" \
+        "$CI_COMMIT_AUTHOR" \
+        "$CI_PIPELINE_SOURCE" \
+        "$CI_COMMIT_TITLE" \
+        "$CI_PIPELINE_URL")
+      curl -sS -X POST -H "Content-Type: application/json" -d "$payload" "https://discord.com/api/webhooks/1503406500931047567/zOWPIqDS1AZyr5MTbS9ikGVNRz2k1dmZkbg10XA97P7TcmqtsJZk_BHoIdLIQpvEYXnQ"
+  rules:
+    - if: '$CI_PIPELINE_SOURCE != "pipeline"'
 
 bridge_hub_smoketest:
   stage: test
