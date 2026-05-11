@@ -1,3 +1,10 @@
+workflow:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_PIPELINE_SOURCE == "push"'
+    - if: '$CI_PIPELINE_SOURCE == "web"'
+    - if: '$CI_PIPELINE_SOURCE == "pipeline"'
+
 stages:
   - remote-notify
   - test
@@ -21,20 +28,48 @@ variables:
 
 notify_discord_remote_git_activity:
   stage: remote-notify
-  image: curlimages/curl:8.8.0
+  image: ruby:3.1
   script:
     - |
-      payload=$(printf '{"username":"Home Automation GitLab","content":"Remote git activity\nRepo: %s\nBranch: %s\nCommit: %s\nAuthor: %s\nSource: %s\nTitle: %s\nPipeline: %s"}' \
-        "$CI_PROJECT_PATH" \
-        "$CI_COMMIT_REF_NAME" \
-        "$CI_COMMIT_SHORT_SHA" \
-        "$CI_COMMIT_AUTHOR" \
-        "$CI_PIPELINE_SOURCE" \
-        "$CI_COMMIT_TITLE" \
-        "$CI_PIPELINE_URL")
-      curl -sS -X POST -H "Content-Type: application/json" -d "$payload" "https://discord.com/api/webhooks/1503406500931047567/zOWPIqDS1AZyr5MTbS9ikGVNRz2k1dmZkbg10XA97P7TcmqtsJZk_BHoIdLIQpvEYXnQ"
+      case "$CI_PIPELINE_SOURCE" in
+        merge_request_event) ACTION="Pull request" ;;
+        push) ACTION="Push" ;;
+        web) ACTION="Manual run" ;;
+        *) ACTION="Remote action" ;;
+      esac
+      export ACTION
+      ruby -rjson -e 'detail = [
+        "Repo: #{ENV.fetch("CI_PROJECT_PATH", "")}",
+        "Branch: #{ENV.fetch("CI_COMMIT_REF_NAME", "")}",
+        "Commit: #{ENV.fetch("CI_COMMIT_SHORT_SHA", "")}",
+        "Author: #{ENV.fetch("CI_COMMIT_AUTHOR", "")}",
+        "Title: #{ENV.fetch("CI_COMMIT_TITLE", "")}",
+        "Source: #{ENV.fetch("CI_PIPELINE_SOURCE", "")}",
+        "Pipeline: #{ENV.fetch("CI_PIPELINE_URL", "")}"
+      ].join("\n");
+      payload = {
+        content: ENV.fetch("CI_PROJECT_NAME", ""),
+        embeds: [
+          {
+            title: "Gitl CI",
+            fields: [
+              {
+                name: ENV.fetch("ACTION", "Remote action"),
+                value: detail
+              }
+            ]
+          }
+        ]
+      };
+      File.write("discord_payload.json", JSON.generate(payload))'
+      curl --fail --silent --show-error \
+        -H "Content-Type: application/json" \
+        --data @discord_payload.json \
+        "https://discord.com/api/webhooks/1503406500931047567/zOWPIqDS1AZyr5MTbS9ikGVNRz2k1dmZkbg10XA97P7TcmqtsJZk_BHoIdLIQpvEYXnQ"
   rules:
-    - if: '$CI_PIPELINE_SOURCE != "pipeline"'
+    - if: '$CI_PIPELINE_SOURCE == "push"'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_PIPELINE_SOURCE == "web"'
 
 bridge_hub_smoketest:
   stage: test
@@ -85,7 +120,7 @@ trigger_ui_pipeline:
   rules:
     - if: '$CI_PIPELINE_SOURCE != "pipeline"'
 
-notify_discord_suite_build:
+"Home Automation CI":
   stage: notify
   tags:
     - windows

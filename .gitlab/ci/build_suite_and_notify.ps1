@@ -47,29 +47,25 @@ function Ensure-RepoCheckout {
 
 function New-DiscordPayload {
     param(
-        [Parameter(Mandatory = $true)][string]$BridgeExe,
-        [Parameter(Mandatory = $true)][string]$HubExe,
-        [Parameter(Mandatory = $true)][string]$UiExe
-    )
-
-    $lines = @(
-        "Home Automation Suite build",
-        "Repo: $env:CI_PROJECT_PATH",
-        "Branch: $env:CI_COMMIT_REF_NAME",
-        "Commit: $env:CI_COMMIT_SHORT_SHA",
-        "Author: $env:CI_COMMIT_AUTHOR",
-        "Source: $env:CI_PIPELINE_SOURCE",
-        "Title: $env:CI_COMMIT_TITLE",
-        "Pipeline: $env:CI_PIPELINE_URL",
-        "Bridge: $(Split-Path -Leaf $BridgeExe)",
-        "Hub: $(Split-Path -Leaf $HubExe)",
-        "UI: $(Split-Path -Leaf $UiExe)"
+        [Parameter(Mandatory = $true)][string]$ProjectName,
+        [Parameter(Mandatory = $true)][string]$ActionName,
+        [Parameter(Mandatory = $true)][string]$ActionDetail
     )
 
     return @{
-        username = "Home Automation CI"
-        content = ($lines -join "`n")
-    } | ConvertTo-Json -Compress
+        content = $ProjectName
+        embeds = @(
+            @{
+                title = "Gitl CI"
+                fields = @(
+                    @{
+                        name = $ActionName
+                        value = $ActionDetail
+                    }
+                )
+            }
+        )
+    } | ConvertTo-Json -Compress -Depth 6
 }
 
 $workspaceRoot = Split-Path -Parent $env:CI_PROJECT_DIR
@@ -149,7 +145,20 @@ Copy-Item -LiteralPath $bridgeExe -Destination (Join-Path $artifactRoot "HomeAut
 Copy-Item -LiteralPath $hubExe -Destination (Join-Path $artifactRoot "Home_Automation_Hub.exe") -Force
 Copy-Item -LiteralPath $uiExe -Destination (Join-Path $artifactRoot "HomeAutomationUI.exe") -Force
 
-$payload = New-DiscordPayload -BridgeExe $bridgeExe -HubExe $hubExe -UiExe $uiExe
+$detail = @(
+    "Repo: $env:CI_PROJECT_PATH",
+    "Branch: $env:CI_COMMIT_REF_NAME",
+    "Commit: $env:CI_COMMIT_SHORT_SHA",
+    "Author: $env:CI_COMMIT_AUTHOR",
+    "Source: $env:CI_PIPELINE_SOURCE",
+    "Title: $env:CI_COMMIT_TITLE",
+    "Pipeline: $env:CI_PIPELINE_URL",
+    "Bridge: $(Split-Path -Leaf $bridgeExe)",
+    "Hub: $(Split-Path -Leaf $hubExe)",
+    "UI: $(Split-Path -Leaf $uiExe)"
+) -join "`n"
+
+$payload = New-DiscordPayload -ProjectName $env:CI_PROJECT_NAME -ActionName "Suite build" -ActionDetail $detail
 
 & curl.exe `
     -sS `
