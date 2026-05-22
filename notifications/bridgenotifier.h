@@ -6,10 +6,7 @@
 
 class BridgeNotifier {
 public:
-    explicit BridgeNotifier(std::string bridgeNotificationsUrl);
+    BridgeNotifier() = default;
 
     bool publish(const Notification& notification) const;
-
-private:
-    std::string bridgeNotificationsUrl;
 };

@@ -5,14 +5,19 @@
 
 #include "api.h"
 
+namespace homeautomationhub::bridge {
+class HubClient;
+}
+
 class Server {
 public:
-    explicit Server(API& api);
+    explicit Server(API& api, homeautomationhub::bridge::HubClient* hubClient = nullptr);
 
     void start(int port);
 
 private:
     API& api;
+    homeautomationhub::bridge::HubClient* hubClient;
 
     void handleRequest(const std::string& request, SOCKET clientSocket);
 

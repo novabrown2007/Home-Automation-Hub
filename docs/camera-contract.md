@@ -1,4 +1,9 @@
-# Camera Contract
+# Legacy Camera Contract
+
+The new Hub communication boundary is documented in `docs/hub-protocol.md`.
+Camera stream discovery should move through `stream.available` Hub Protocol
+metadata. The older HTTP registration notes below describe the disabled legacy
+camera path and must not be extended with new hardware or transport logic.
 
 ## Ownership
 

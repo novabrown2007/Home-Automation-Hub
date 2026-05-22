@@ -311,7 +311,6 @@ void ThreadManager::runBackgroundJob(
         }
 
         try {
-            Logger::instance().debug("ThreadManager", "Running background job name=" + job.name);
             job.task();
         } catch (const std::exception& ex) {
             Logger::instance().error("ThreadManager", "Background job failed name=" + job.name + " error=" + ex.what());

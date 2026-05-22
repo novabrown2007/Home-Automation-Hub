@@ -21,7 +21,6 @@ void CameraAutomation::scheduleFeedProcessing(const std::string& cameraId) {
 }
 
 void CameraAutomation::processAllFeeds() {
-    Logger::instance().debug("CameraAutomation", "Starting background processing sweep for all camera feeds.");
     for (const CameraFeed& feed : cameras.getAllFeeds()) {
         scheduleFeedProcessing(feed.cameraId);
     }
@@ -213,49 +212,12 @@ void CameraAutomation::ensureBridgeCameraState(const CameraFeed& feed, bool shou
         return;
     }
 
-    const std::string action = shouldBeStreaming ? "start" : "stop";
-    const std::string controlUrl = deriveBridgeControlUrl(feed, action);
-    if (controlUrl.empty()) {
-        Logger::instance().warning(
-            "CameraAutomation",
-            "Unable to derive bridge control URL for camera=" + feed.cameraId + " action=" + action
-        );
-        return;
-    }
-
-    const HttpResponse response = HttpClient::postJson(controlUrl, "");
-    if (!response.ok()) {
-        Logger::instance().warning(
-            "CameraAutomation",
-            "Bridge camera control failed for camera=" + feed.cameraId +
-            " action=" + action +
-            " statusCode=" + std::to_string(response.statusCode) +
-            " statusText=" + response.statusText
-        );
-        return;
-    }
-
     cameras.updateBridgeStreamEnabled(feed.cameraId, shouldBeStreaming);
-    Logger::instance().info(
+    Logger::instance().debug(
         "CameraAutomation",
-        "Bridge camera control succeeded for camera=" + feed.cameraId + " action=" + action
+        "Compatibility camera stream flag updated camera=" + feed.cameraId +
+        "; Bridge stream lifecycle is now driven by Hub Protocol metadata."
     );
-}
-
-std::string CameraAutomation::deriveBridgeControlUrl(const CameraFeed& feed, const std::string& action) const {
-    const std::string marker = "/camera/frame/" + feed.cameraId;
-    const std::size_t markerPos = feed.frameUrl.find(marker);
-    if (markerPos != std::string::npos) {
-        return feed.frameUrl.substr(0, markerPos) + "/camera/" + action + "/" + feed.cameraId;
-    }
-
-    const std::string streamMarker = "/camera/stream/" + feed.cameraId;
-    const std::size_t streamPos = feed.streamUrl.find(streamMarker);
-    if (streamPos != std::string::npos) {
-        return feed.streamUrl.substr(0, streamPos) + "/camera/" + action + "/" + feed.cameraId;
-    }
-
-    return {};
 }
 
 std::string CameraAutomation::notificationSeverity(const CameraModeProfile& modeProfile, const std::string& category) const {

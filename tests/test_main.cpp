@@ -5,6 +5,15 @@
 #include <thread>
 
 #include "../accesspoint/api.h"
+#include "../bridge/commands/commandBuilder.h"
+#include "../bridge/handlers/deviceEventHandler.h"
+#include "../bridge/handlers/deviceStateHandler.h"
+#include "../bridge/handlers/streamHandler.h"
+#include "../bridge/hubClient.h"
+#include "../bridge/routing/messageRouter.h"
+#include "../bridge/state/bridgeStateCache.h"
+#include "../bridge/streams/streamRegistry.h"
+#include "../bridge/subscriptions/subscriptionManager.h"
 #include "../logging/logger.h"
 #include "../modules/cameras/cameraautomation.h"
 #include "../modules/cameras/cameras.h"
@@ -99,7 +108,7 @@ void test_api_and_camera_automation_generate_detection_events() {
 
     Cameras cameras;
     NotificationCenter notifications;
-    BridgeNotifier bridgeNotifier("http://127.0.0.1:6553/notifications");
+    BridgeNotifier bridgeNotifier;
     CameraAutomation automation(cameras, threadManager, notifications, bridgeNotifier);
     API api(cameras, automation, notifications);
 
@@ -115,9 +124,16 @@ void test_api_and_camera_automation_generate_detection_events() {
 
     require(api.setCameraMode("bedroomcamera", "away"), "API setCameraMode should accept away mode.");
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(250));
+    CameraFeed feed;
+    const auto processingDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    do {
+        feed = api.getCameraFeed("bedroomcamera");
+        if (feed.processingStatus == "Capture Failed") {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    } while (std::chrono::steady_clock::now() < processingDeadline);
 
-    const CameraFeed feed = api.getCameraFeed("bedroomcamera");
     require(feed.cameraId == "bedroomcamera", "API should return stored camera feed.");
     require(feed.processingStatus == "Capture Failed", "Camera processing should record capture failure for unreachable frame URL.");
     require(feed.detections.lastEvent == "Frame fetch failed", "Processing should record frame fetch failures.");
@@ -153,6 +169,94 @@ void test_frame_analyzer_parses_helper_output() {
     require(changed.detected, "Louder follow-up clip should trigger sound anomaly detection.");
     require(changed.score > baseline.score, "Louder clip should produce a higher RMS score.");
 }
+
+void test_hub_protocol_routes_state_streams_and_outbound_intelligence() {
+    using namespace homeautomationhub::bridge;
+
+    SubscriptionManager subscriptions;
+    BridgeStateCache stateCache;
+    StreamRegistry streamRegistry;
+    DeviceStateHandler stateHandler(stateCache);
+    DeviceEventHandler eventHandler;
+    StreamHandler streamHandler(streamRegistry);
+    MessageRouter router(subscriptions);
+    router.registerHandler(HubCategory::DeviceState, [&stateHandler](const HubMessage& message) {
+        return stateHandler.handle(message);
+    });
+    router.registerHandler(HubCategory::DeviceEvent, [&eventHandler](const HubMessage& message) {
+        return eventHandler.handle(message);
+    });
+    router.registerHandler(HubCategory::StreamAvailable, [&streamHandler](const HubMessage& message) {
+        return streamHandler.handle(message);
+    });
+    router.registerHandler(HubCategory::StreamClosed, [&streamHandler](const HubMessage& message) {
+        return streamHandler.handle(message);
+    });
+
+    bool eventSeen = false;
+    subscriptions.subscribe("device.*", [&eventSeen](const HubMessage& message) {
+        eventSeen = eventSeen || message.category == HubCategory::DeviceEvent;
+    });
+    subscriptions.subscribe("stream.*", [](const HubMessage&) {});
+
+    std::vector<std::string> outbound;
+    HubClient client(
+        HubClientConfig{.bridgeProtocolUrl = "memory://bridge"},
+        router,
+        subscriptions,
+        [&outbound](const std::string&, const std::string& jsonBody, std::string&) {
+            outbound.push_back(jsonBody);
+            return true;
+        }
+    );
+
+    require(client.connect(), "Hub client should send an initial subscription request.");
+    require(!outbound.empty(), "Hub client should emit a subscription envelope.");
+    require(parseHubMessage(outbound.front()).message->category == HubCategory::SubscriptionRequest,
+            "Initial Hub client envelope should be a subscription request.");
+
+    require(client.receive(R"({
+        "category": "device.state",
+        "source": { "deviceId": "bedroomLight1", "room": "bedroom" },
+        "data": { "power": true, "brightness": 75 }
+    })"), "Hub client should accept normalized device state.");
+    const auto cachedLight = stateCache.deviceState("bedroomLight1");
+    require(cachedLight.has_value(), "Device state should reach orchestration cache.");
+    require(cachedLight.has_value() && cachedLight->data.value("brightness", 0) == 75,
+            "Cached device state should preserve normalized data.");
+
+    require(client.receive(R"({
+        "category": "device.event",
+        "source": { "deviceId": "hallwayMotion1" },
+        "data": { "event": "motionDetected", "confidence": 0.94 }
+    })"), "Hub client should route momentary device events.");
+    require(eventSeen, "Device event should fan out through subscriptions.");
+
+    require(client.receive(R"({
+        "category": "stream.available",
+        "source": { "deviceId": "bedroomCamera1" },
+        "data": {
+            "streamId": "camera-bedroom-01",
+            "streamType": "rtsp",
+            "codec": "h264",
+            "resolution": "1920x1080",
+            "fps": 30,
+            "endpoint": "rtsp://bridge/camera-bedroom-01"
+        }
+    })"), "Hub client should accept stream metadata.");
+    require(streamRegistry.stream("camera-bedroom-01").has_value(), "Stream registry should expose active metadata.");
+
+    require(!client.receive(R"({ "category": "stream.available", "source": {}, "data": {} })"),
+            "Malformed stream metadata should be rejected without crashing.");
+    require(client.sendAnalysisResult("vision", Json{{"event", "personDetected"}, {"confidence", 0.91}, {"cameraId", "bedroomCamera1"}}),
+            "Hub client should send analysis.result envelopes.");
+    require(client.sendCommand("bedroomLight1", "setBrightness", Json{{"brightness", 20}}),
+            "Hub client should send bridge.command envelopes.");
+    require(parseHubMessage(outbound[outbound.size() - 2]).message->category == HubCategory::AnalysisResult,
+            "Analysis envelope should use analysis.result.");
+    require(parseHubMessage(outbound.back()).message->category == HubCategory::BridgeCommand,
+            "Command envelope should use bridge.command.");
+}
 }
 
 int main() {
@@ -161,6 +265,7 @@ int main() {
     test_api_and_camera_automation_generate_detection_events();
     test_motion_detector_uses_real_frame_bytes();
     test_frame_analyzer_parses_helper_output();
+    test_hub_protocol_routes_state_streams_and_outbound_intelligence();
 
     if (failures > 0) {
         std::cerr << failures << " hub test(s) failed.\n";

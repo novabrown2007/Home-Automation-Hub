@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstring>
+#include <mutex>
 #include <sstream>
 #include <string>
 
@@ -15,6 +16,16 @@ struct ParsedUrl {
     int port{80};
     std::string path{"/"};
 };
+
+bool ensureWinsockStarted() {
+    static std::once_flag initFlag;
+    static bool ready = false;
+    std::call_once(initFlag, []() {
+        WSADATA wsaData;
+        ready = WSAStartup(MAKEWORD(2, 2), &wsaData) == 0;
+    });
+    return ready;
+}
 
 std::string trim(std::string value) {
     auto notSpace = [](unsigned char ch) {
@@ -112,6 +123,13 @@ HttpResponse parseResponse(const std::string& rawResponse) {
 }
 
 HttpResponse sendRequest(const std::string& method, const std::string& url, const std::string& body, const std::string& contentType) {
+    if (!ensureWinsockStarted()) {
+        return HttpResponse{
+            .statusCode = 0,
+            .statusText = "WSAStartup failed",
+        };
+    }
+
     ParsedUrl parsed;
     if (!parseUrl(url, parsed)) {
         return HttpResponse{

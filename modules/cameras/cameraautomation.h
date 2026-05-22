@@ -22,7 +22,6 @@ public:
 private:
     void processFeed(const std::string& cameraId);
     void ensureBridgeCameraState(const CameraFeed& feed, bool shouldBeStreaming);
-    std::string deriveBridgeControlUrl(const CameraFeed& feed, const std::string& action) const;
     std::string notificationSeverity(const CameraModeProfile& modeProfile, const std::string& category) const;
     bool shouldKeepSoundAlertActive(const std::string& cameraId, std::chrono::steady_clock::time_point now);
     bool shouldPublishSoundNotification(const std::string& cameraId, std::chrono::steady_clock::time_point now);

@@ -5,8 +5,9 @@
 #include <string>
 
 #include "../logging/logger.h"
+#include "../bridge/hubClient.h"
 
-Server::Server(API& api) : api(api) {}
+Server::Server(API& api, homeautomationhub::bridge::HubClient* hubClient) : api(api), hubClient(hubClient) {}
 
 namespace {
 std::string escapeJson(const std::string& value) {
@@ -253,6 +254,28 @@ void Server::handleRequest(const std::string& request, SOCKET clientSocket) {
             "{ \"service\": \"" + escapeJson(api.getStatus()) + "\", \"status\": \"ok\", \"registered_camera_feeds\": "
             + std::to_string(api.getRegisteredCameraFeedCount()) + " }";
         sendResponse(clientSocket, body);
+        return;
+    }
+
+    if (method == "POST" && path == "/hub/messages") {
+        if (hubClient == nullptr) {
+            sendResponse(clientSocket, "{ \"error\": \"hub protocol client unavailable\" }", 503, "Service Unavailable");
+            return;
+        }
+        if (!hubClient->receive(extractRequestBody(request))) {
+            sendResponse(clientSocket, "{ \"error\": \"invalid hub protocol message\" }", 400, "Bad Request");
+            return;
+        }
+        sendResponse(clientSocket, "{ \"status\": \"accepted\" }", 202, "Accepted");
+        return;
+    }
+
+    if (path.rfind("/camera/", 0) == 0 || path == "/notifications") {
+        Logger::instance().warning(
+            "Server",
+            "Rejected legacy orchestration route path=" + path + "; use Hub Protocol /hub/messages."
+        );
+        sendResponse(clientSocket, "{ \"error\": \"legacy route disabled; use hub protocol\" }", 410, "Gone");
         return;
     }
 
