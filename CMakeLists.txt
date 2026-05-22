@@ -54,6 +54,28 @@ set(HUB_SOURCES
         bridge/handlers/bridgeErrorHandler.h
         bridge/routing/messageRouter.cpp
         bridge/routing/messageRouter.h
+        testing/debugging/eventTracer.cpp
+        testing/debugging/eventTracer.h
+        testing/debugging/orchestrationConsole.cpp
+        testing/debugging/orchestrationConsole.h
+        testing/debugging/stateDebugger.cpp
+        testing/debugging/stateDebugger.h
+        testing/analysis/occupancyAnalyzer.cpp
+        testing/analysis/occupancyAnalyzer.h
+        testing/automation/ruleEngine.cpp
+        testing/automation/ruleEngine.h
+        testing/automation/automationEngine.cpp
+        testing/automation/automationEngine.h
+        testing/analysis/mockVisionAnalyzer.cpp
+        testing/analysis/mockVisionAnalyzer.h
+        testing/analysis/streamAnalysisManager.cpp
+        testing/analysis/streamAnalysisManager.h
+        testing/simulation/orchestrationSimulator.cpp
+        testing/simulation/orchestrationSimulator.h
+        testing/testing/integrationTester.cpp
+        testing/testing/integrationTester.h
+        testing/testing/workflowTester.cpp
+        testing/testing/workflowTester.h
         config/configloader.cpp
         config/configloader.h
         modules/cameras/cameras.cpp

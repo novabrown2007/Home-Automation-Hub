@@ -22,6 +22,16 @@
 #include "../notifications/bridgenotifier.h"
 #include "../notifications/notifications.h"
 #include "../threading/threadmanager.h"
+#include "../testing/analysis/mockVisionAnalyzer.h"
+#include "../testing/analysis/occupancyAnalyzer.h"
+#include "../testing/analysis/streamAnalysisManager.h"
+#include "../testing/automation/automationEngine.h"
+#include "../testing/debugging/eventTracer.h"
+#include "../testing/debugging/orchestrationConsole.h"
+#include "../testing/debugging/stateDebugger.h"
+#include "../testing/simulation/orchestrationSimulator.h"
+#include "../testing/testing/integrationTester.h"
+#include "../testing/testing/workflowTester.h"
 
 namespace {
 int failures = 0;
@@ -257,6 +267,74 @@ void test_hub_protocol_routes_state_streams_and_outbound_intelligence() {
     require(parseHubMessage(outbound.back()).message->category == HubCategory::BridgeCommand,
             "Command envelope should use bridge.command.");
 }
+
+void test_mock_orchestration_environment_validates_workflows() {
+    using namespace homeautomationhub;
+    using namespace homeautomationhub::bridge;
+
+    testing::EventTracer tracer;
+    testing::OrchestrationConsole console(tracer);
+    SubscriptionManager subscriptions;
+    subscriptions.subscribe("*", [&console](const HubMessage& message) { console.bridgeEvent(message); });
+
+    BridgeStateCache stateCache;
+    StreamRegistry streamRegistry;
+    DeviceStateHandler stateHandler(stateCache);
+    DeviceEventHandler eventHandler;
+    StreamHandler streamHandler(streamRegistry);
+    MessageRouter router(subscriptions);
+    router.registerHandler(HubCategory::DeviceState, [&stateHandler](const HubMessage& message) {
+        return stateHandler.handle(message);
+    });
+    router.registerHandler(HubCategory::DeviceEvent, [&eventHandler](const HubMessage& message) {
+        return eventHandler.handle(message);
+    });
+    router.registerHandler(HubCategory::StreamAvailable, [&streamHandler](const HubMessage& message) {
+        return streamHandler.handle(message);
+    });
+    router.registerHandler(HubCategory::StreamClosed, [&streamHandler](const HubMessage& message) {
+        return streamHandler.handle(message);
+    });
+
+    std::vector<HubMessage> outbound;
+    HubClient client(
+        HubClientConfig{.bridgeProtocolUrl = "memory://mock-bridge"},
+        router,
+        subscriptions,
+        [&outbound](const std::string&, const std::string& jsonBody, std::string&) {
+            const HubParseResult parsed = parseHubMessage(jsonBody);
+            if (!parsed.ok()) return false;
+            outbound.push_back(*parsed.message);
+            return true;
+        }
+    );
+
+    testing::OccupancyAnalyzer occupancy(tracer, console);
+    occupancy.attach(subscriptions);
+    testing::AutomationEngine automation(client, tracer, console);
+    automation.installMockRules();
+    automation.attach(subscriptions);
+    testing::MockVisionAnalyzer vision(client, tracer, console);
+    testing::StreamAnalysisManager streams(streamRegistry, vision, tracer, console);
+    streams.attach(subscriptions);
+    testing::StateDebugger stateDebugger(stateCache, occupancy, streamRegistry, subscriptions);
+    require(client.connect(), "Mock Hub client should emit subscriptions before scenarios.");
+
+    testing::OrchestrationSimulator simulator(client, tracer, console);
+    testing::IntegrationTester integration(simulator, outbound);
+    const testing::OrchestrationTestReport commandFlow = integration.validateMotionCommandFlow();
+    const testing::OrchestrationTestReport analysisFlow = integration.validateStreamAnalysisFlow();
+    testing::WorkflowTester workflow(simulator, stateCache, streamRegistry, occupancy, tracer);
+    const testing::OrchestrationTestReport workflowFlow = workflow.validateOrchestrationWorkflow();
+
+    require(commandFlow.passed, "Motion integration flow should emit a bridge command.");
+    require(analysisFlow.passed, "Stream integration flow should emit mock analysis results.");
+    require(workflowFlow.passed, "Workflow simulation should synchronize state, occupancy, and streams.");
+    require(!streams.attachedStreams().empty(), "Stream manager should retain active analysis attachment for open mock stream.");
+    require(!console.lines().empty(), "Orchestration console should capture debugging lines.");
+    require(stateDebugger.snapshot(&automation).find("cached_devices=") != std::string::npos,
+            "State debugger should provide a mock orchestration snapshot.");
+}
 }
 
 int main() {
@@ -266,6 +344,7 @@ int main() {
     test_motion_detector_uses_real_frame_bytes();
     test_frame_analyzer_parses_helper_output();
     test_hub_protocol_routes_state_streams_and_outbound_intelligence();
+    test_mock_orchestration_environment_validates_workflows();
 
     if (failures > 0) {
         std::cerr << failures << " hub test(s) failed.\n";

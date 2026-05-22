@@ -55,6 +55,14 @@ bool HubClient::send(const HubMessage& message) {
         Logger::instance().warning("HubProtocol.Client", "Rejected outbound Hub Protocol envelope " + lastError());
         return false;
     }
+    if (!connected.load() && message.category != HubCategory::SubscriptionRequest) {
+        setFailure("Bridge Hub Protocol is disconnected; outbound envelope is waiting for subscription reconnect.");
+        Logger::instance().warning(
+            "HubProtocol.Client",
+            "Skipped outbound category=" + toString(message.category) + " while Bridge protocol connection is offline."
+        );
+        return false;
+    }
     std::string error;
     const bool accepted = sender(clientConfig.bridgeProtocolUrl, toJson(message).dump(), error);
     connected.store(accepted);

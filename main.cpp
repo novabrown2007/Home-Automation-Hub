@@ -17,6 +17,13 @@
 #include "notifications/bridgenotifier.h"
 #include "notifications/notifications.h"
 #include "threading/threadmanager.h"
+#include "testing/analysis/mockVisionAnalyzer.h"
+#include "testing/analysis/occupancyAnalyzer.h"
+#include "testing/analysis/streamAnalysisManager.h"
+#include "testing/automation/automationEngine.h"
+#include "testing/debugging/eventTracer.h"
+#include "testing/debugging/orchestrationConsole.h"
+#include "testing/debugging/stateDebugger.h"
 
 #include <chrono>
 
@@ -25,12 +32,14 @@ int main() {
     Logger::instance().info("Main", "Home Automation Hub starting.");
 
     using namespace homeautomationhub::bridge;
+    namespace testing = homeautomationhub::testing;
 
+    testing::EventTracer eventTracer;
+    testing::OrchestrationConsole orchestrationConsole(eventTracer);
     SubscriptionManager subscriptions;
-    subscriptions.subscribe("device.*", [](const HubMessage&) {});
-    subscriptions.subscribe("stream.*", [](const HubMessage&) {});
-    subscriptions.subscribe("analysis.result", [](const HubMessage&) {});
-    subscriptions.subscribe("bridge.error", [](const HubMessage&) {});
+    subscriptions.subscribe("*", [&orchestrationConsole](const HubMessage& message) {
+        orchestrationConsole.bridgeEvent(message);
+    });
 
     BridgeStateCache bridgeStateCache;
     StreamRegistry streamRegistry;
@@ -64,6 +73,17 @@ int main() {
         return bridgeErrorHandler.handle(message);
     });
     HubClient hubClient({}, messageRouter, subscriptions);
+
+    testing::OccupancyAnalyzer occupancyAnalyzer(eventTracer, orchestrationConsole);
+    occupancyAnalyzer.attach(subscriptions);
+    testing::AutomationEngine automationEngine(hubClient, eventTracer, orchestrationConsole);
+    automationEngine.installMockRules();
+    automationEngine.attach(subscriptions);
+    testing::MockVisionAnalyzer mockVisionAnalyzer(hubClient, eventTracer, orchestrationConsole);
+    testing::StreamAnalysisManager streamAnalysisManager(streamRegistry, mockVisionAnalyzer, eventTracer, orchestrationConsole);
+    streamAnalysisManager.attach(subscriptions);
+    testing::StateDebugger stateDebugger(bridgeStateCache, occupancyAnalyzer, streamRegistry, subscriptions);
+    Logger::instance().info("Main", "Mock orchestration environment ready " + stateDebugger.snapshot(&automationEngine));
     hubClient.connect();
 
     ThreadManager threadManager;
