@@ -1,4 +1,4 @@
 {
-  "bridgePort": 8083,
-  "hubPort": 8080
+  "bridgePort": 8082,
+  "hubPort": 8083
 }
