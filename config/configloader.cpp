@@ -52,10 +52,17 @@ configloader::Config configloader::load(const std::filesystem::path& path) {
     Json document;
     input >> document;
 
-    if (document.contains("serverPort")) {
-        config.serverPort = document.at("serverPort").get<int>();
-        if (config.serverPort <= 0 || config.serverPort > 65535) {
-            throw std::runtime_error("Config serverPort must be between 1 and 65535.");
+    if (document.contains("bridgePort")) {
+        config.bridgePort = document.at("bridgePort").get<int>();
+        if (config.bridgePort <= 0 || config.bridgePort > 65535) {
+            throw std::runtime_error("Config bridgePort must be between 1 and 65535.");
+        }
+    }
+
+    if (document.contains("hubPort")) {
+        config.hubPort = document.at("hubPort").get<int>();
+        if (config.hubPort <= 0 || config.hubPort > 65535) {
+            throw std::runtime_error("Config hubPort must be between 1 and 65535.");
         }
     }
 

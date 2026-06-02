@@ -31,6 +31,7 @@
 int main() {
     Logger::instance().initialize("logs/home-automation-hub.log");
     Logger::instance().info("Main", "Home Automation Hub starting.");
+    const configloader::Config config = configloader::load();
 
     using namespace homeautomationhub::bridge;
     namespace testing = homeautomationhub::testing;
@@ -73,7 +74,9 @@ int main() {
     messageRouter.registerHandler(HubCategory::BridgeError, [&bridgeErrorHandler](const HubMessage& message) {
         return bridgeErrorHandler.handle(message);
     });
-    HubClient hubClient({}, messageRouter, subscriptions);
+    HubClientConfig hubClientConfig{};
+    hubClientConfig.bridgeProtocolUrl = "http://127.0.0.1:" + std::to_string(config.hubPort) + "/hub/messages";
+    HubClient hubClient(hubClientConfig, messageRouter, subscriptions);
 
     testing::OccupancyAnalyzer occupancyAnalyzer(eventTracer, orchestrationConsole);
     occupancyAnalyzer.attach(subscriptions);
@@ -112,10 +115,9 @@ int main() {
     });
     Logger::instance().info("Main", "Camera automation background jobs registered.");
     API api(cameras, cameraAutomation, notifications);
-    const configloader::Config config = configloader::load();
-    Logger::instance().info("Main", "Server configured to listen on port " + std::to_string(config.serverPort));
+    Logger::instance().info("Main", "Bridge configured to listen on port " + std::to_string(config.bridgePort));
     Server server(api, &hubClient);
-    server.start(config.serverPort);
+    server.start(config.bridgePort);
     Logger::instance().info("Main", "Home Automation Hub shutting down.");
     return 0;
 }

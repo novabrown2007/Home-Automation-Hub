@@ -6,7 +6,8 @@
 class configloader {
 public:
     struct Config {
-        int serverPort{8082};
+        int bridgePort{8083};
+        int hubPort{8080};
     };
 
     static Config load();
