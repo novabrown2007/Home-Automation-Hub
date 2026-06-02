@@ -1,5 +1,6 @@
 #include "accesspoint/api.h"
 #include "accesspoint/server.h"
+#include "config/configloader.h"
 #include "bridge/handlers/analysisHandler.h"
 #include "bridge/handlers/bridgeErrorHandler.h"
 #include "bridge/handlers/deviceEventHandler.h"
@@ -111,8 +112,10 @@ int main() {
     });
     Logger::instance().info("Main", "Camera automation background jobs registered.");
     API api(cameras, cameraAutomation, notifications);
+    const configloader::Config config = configloader::load();
+    Logger::instance().info("Main", "Server configured to listen on port " + std::to_string(config.serverPort));
     Server server(api, &hubClient);
-    server.start(8081);
+    server.start(config.serverPort);
     Logger::instance().info("Main", "Home Automation Hub shutting down.");
     return 0;
 }

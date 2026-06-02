@@ -2,3 +2,7 @@
 runtime/
 cmake-build-*/
 models/
+logs/
+*.log
+hub-stdout.txt
+hub-stderr.txt

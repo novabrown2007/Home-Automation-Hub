@@ -1,1 +1,3 @@
-// Any config options we end up needing will go here.
+{
+  "serverPort": 8082
+}
